@@ -417,11 +417,9 @@ class _ScannerViewState extends State<ScannerView> {
 
             const SizedBox(height: 10),
 
-            // ── Selector de Idioma (visible para Auto o Pokémon) ──────────
-            if (_selectedGame == TcgGame.all || _selectedGame == TcgGame.pokemon) ...[
-              _buildLanguageSelector(),
-              const SizedBox(height: 12),
-            ],
+            // ── Selector de Idioma (para todas las colecciones) ───────────
+            _buildLanguageSelector(),
+            const SizedBox(height: 12),
 
             // ── Cámara / Foto de la carta ─────────────────────────────────
             _buildImagePreview(),

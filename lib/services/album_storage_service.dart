@@ -45,6 +45,16 @@ class AlbumStorageService {
   /// Alias de addCard para consistencia.
   Future<void> saveCard(PokemonCard card) => addCard(card);
 
+  /// Actualiza una carta existente en el álbum (por su ID).
+  Future<void> updateCard(PokemonCard updatedCard) async {
+    final album = await loadAlbum();
+    final index = album.indexWhere((c) => c.id == updatedCard.id);
+    if (index != -1) {
+      album[index] = updatedCard;
+      await saveAlbum(album);
+    }
+  }
+
   /// Elimina una carta del álbum por su ID.
   Future<void> removeCard(String cardId) async {
     final album = await loadAlbum();

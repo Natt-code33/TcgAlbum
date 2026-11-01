@@ -14,6 +14,7 @@ import '../services/album_storage_service.dart';
 import '../services/ocr_service.dart';
 
 class ManualCardView extends StatefulWidget {
+  final PokemonCard? cardToEdit;
   final String? initialName;
   final String? initialNumber;
   final String? initialSet;
@@ -23,6 +24,7 @@ class ManualCardView extends StatefulWidget {
 
   const ManualCardView({
     super.key,
+    this.cardToEdit,
     this.initialName,
     this.initialNumber,
     this.initialSet,
@@ -55,20 +57,62 @@ class _ManualCardViewState extends State<ManualCardView> {
   @override
   void initState() {
     super.initState();
-    _nameController = TextEditingController(text: widget.initialName ?? '');
-    _numberController = TextEditingController(text: widget.initialNumber ?? '');
-    _setController = TextEditingController(text: widget.initialSet ?? '');
-    _cmPriceController = TextEditingController();
-    _psa10PriceController = TextEditingController();
-    _imageUrlController = TextEditingController();
+    final edit = widget.cardToEdit;
 
-    _imageFile = widget.initialImage;
-    if (widget.initialGame != null && widget.initialGame != TcgGame.all) {
-      _selectedGame = widget.initialGame!;
+    _nameController = TextEditingController(
+      text: edit?.name ?? widget.initialName ?? '',
+    );
+    _numberController = TextEditingController(
+      text: edit?.number ?? widget.initialNumber ?? '',
+    );
+    _setController = TextEditingController(
+      text: edit?.setName ?? widget.initialSet ?? '',
+    );
+    _cmPriceController = TextEditingController(
+      text: edit?.cardmarketPrices?.averageSellPrice != null
+          ? edit!.cardmarketPrices!.averageSellPrice!.toStringAsFixed(2)
+          : (edit?.cardmarketPrices?.trendPrice != null
+              ? edit!.cardmarketPrices!.trendPrice!.toStringAsFixed(2)
+              : ''),
+    );
+    _psa10PriceController = TextEditingController(
+      text: edit?.psa10Price != null
+          ? edit!.psa10Price!.toStringAsFixed(2)
+          : '',
+    );
+    _imageUrlController = TextEditingController(
+      text: (edit != null && edit.imageUrl.startsWith('http'))
+          ? edit.imageUrl
+          : '',
+    );
+
+    if (edit != null &&
+        !edit.imageUrl.startsWith('http') &&
+        edit.imageUrl.isNotEmpty) {
+      final f = File(edit.imageUrl);
+      if (f.existsSync()) {
+        _imageFile = f;
+      }
+    } else {
+      _imageFile = widget.initialImage;
     }
-    if (widget.initialLanguage != null &&
-        widget.initialLanguage != CardLanguage.auto) {
-      _selectedLanguage = widget.initialLanguage!;
+
+    if (edit != null) {
+      _selectedGame = edit.game;
+      if (edit.language != null) {
+        _selectedLanguage = CardLanguage.values.firstWhere(
+          (l) => l.apiCode == edit.language,
+          orElse: () => CardLanguage.es,
+        );
+      }
+    } else {
+      if (widget.initialGame != null && widget.initialGame != TcgGame.all) {
+        _selectedGame = widget.initialGame!;
+      }
+      if (widget.initialLanguage != null &&
+          widget.initialLanguage != CardLanguage.auto) {
+        _selectedLanguage = widget.initialLanguage!;
+      }
     }
   }
 
@@ -123,6 +167,8 @@ class _ManualCardViewState extends State<ManualCardView> {
       finalImageUrl = _imageFile!.path;
     } else if (_imageUrlController.text.trim().isNotEmpty) {
       finalImageUrl = _imageUrlController.text.trim();
+    } else if (widget.cardToEdit != null) {
+      finalImageUrl = widget.cardToEdit!.imageUrl;
     }
 
     int? setTotal;
@@ -131,6 +177,46 @@ class _ManualCardViewState extends State<ManualCardView> {
       setTotal = int.tryParse(parts[1].trim());
     }
 
+    // Modo edición: actualiza la carta existente manteniendo su ID
+    if (widget.cardToEdit != null) {
+      final updated = widget.cardToEdit!.copyWith(
+        name: rawName,
+        number: rawNumber,
+        setName: rawSet.isNotEmpty ? rawSet : widget.cardToEdit!.setName,
+        imageUrl: finalImageUrl,
+        game: _selectedGame,
+        cardmarketPrices: cmPrice != null
+            ? CardmarketPrices(
+                averageSellPrice: cmPrice,
+                trendPrice: cmPrice,
+                psa10Price: psaPrice ?? widget.cardToEdit!.psa10Price,
+              )
+            : (psaPrice != null
+                ? CardmarketPrices(psa10Price: psaPrice)
+                : widget.cardToEdit!.cardmarketPrices),
+        psa10Price: psaPrice ?? widget.cardToEdit!.psa10Price,
+        setPrintedTotal: setTotal ?? widget.cardToEdit!.setPrintedTotal,
+        setTotal: setTotal ?? widget.cardToEdit!.setTotal,
+        language: _selectedLanguage.apiCode,
+      );
+
+      await _storage.updateCard(updated);
+
+      if (mounted) {
+        setState(() => _isSaving = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('¡"${updated.name}" actualizada en tu álbum!'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+        Navigator.of(context).pop(true);
+      }
+      return;
+    }
+
+    // Modo creación: añade una nueva carta con ID único
     final card = PokemonCard(
       id: 'custom_${DateTime.now().millisecondsSinceEpoch}',
       name: rawName,
@@ -171,9 +257,9 @@ class _ManualCardViewState extends State<ManualCardView> {
       backgroundColor: const Color(0xFF1A1A2E),
       appBar: AppBar(
         backgroundColor: const Color(0xFF16213E),
-        title: const Text(
-          'Añadir Carta Manualmente',
-          style: TextStyle(color: Colors.white, fontSize: 18),
+        title: Text(
+          widget.cardToEdit != null ? 'Editar Carta' : 'Añadir Carta Manualmente',
+          style: const TextStyle(color: Colors.white, fontSize: 18),
         ),
         iconTheme: const IconThemeData(color: Colors.white),
       ),
@@ -285,7 +371,11 @@ class _ManualCardViewState extends State<ManualCardView> {
                       )
                     : const Icon(Icons.check),
                 label: Text(
-                  _isSaving ? 'Guardando...' : 'Guardar en mi Álbum',
+                  _isSaving
+                      ? 'Guardando...'
+                      : (widget.cardToEdit != null
+                          ? 'Guardar Cambios'
+                          : 'Guardar en mi Álbum'),
                   style: const TextStyle(
                     fontSize: 16,
                     fontWeight: FontWeight.bold,

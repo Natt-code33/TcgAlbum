@@ -92,6 +92,232 @@ class _AlbumViewState extends State<AlbumView> {
     }
   }
 
+  Future<void> _editCard(PokemonCard card) async {
+    final updated = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => ManualCardView(cardToEdit: card),
+      ),
+    );
+    if (updated == true) {
+      await _loadAlbum();
+    }
+  }
+
+  Future<void> _showCardDetails(PokemonCard card) async {
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF16213E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return Padding(
+          padding: EdgeInsets.only(
+            left: 20,
+            right: 20,
+            top: 16,
+            bottom: MediaQuery.of(ctx).padding.bottom + 20,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.white24,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 14),
+
+              Center(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: card.imageUrl.startsWith('http')
+                      ? CachedNetworkImage(
+                          imageUrl: card.imageUrl,
+                          height: 240,
+                          fit: BoxFit.contain,
+                          placeholder: (_, __) => const SizedBox(
+                            height: 240,
+                            child: Center(
+                              child: CircularProgressIndicator(color: Colors.amber),
+                            ),
+                          ),
+                          errorWidget: (_, __, ___) => const SizedBox(
+                            height: 240,
+                            child: Icon(Icons.broken_image,
+                                color: Colors.white38, size: 60),
+                          ),
+                        )
+                      : (card.imageUrl.isNotEmpty &&
+                              File(card.imageUrl).existsSync()
+                          ? Image.file(File(card.imageUrl),
+                              height: 240, fit: BoxFit.contain)
+                          : const SizedBox(
+                              height: 240,
+                              child: Icon(Icons.image_not_supported,
+                                  color: Colors.white38, size: 60),
+                            )),
+                ),
+              ),
+
+              const SizedBox(height: 16),
+
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      card.name,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: Color(card.game.colorHex).withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(6),
+                      border:
+                          Border.all(color: Color(card.game.colorHex), width: 1),
+                    ),
+                    child: Text(
+                      '${card.game.icon} ${card.game.label}',
+                      style: TextStyle(
+                        color: Color(card.game.colorHex),
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 8),
+
+              Text(
+                card.setName.isNotEmpty
+                    ? '${card.setName} • #${card.number}'
+                    : 'Ref: #${card.number}',
+                style: const TextStyle(color: Colors.white60, fontSize: 13),
+              ),
+
+              const SizedBox(height: 12),
+
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0F3460),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: [
+                    Column(
+                      children: [
+                        const Text(
+                          'Cardmarket (Media)',
+                          style: TextStyle(color: Colors.white54, fontSize: 11),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          card.cardmarketPrices?.averageSellPrice != null
+                              ? '${card.cardmarketPrices!.averageSellPrice!.toStringAsFixed(2)} €'
+                              : (card.cardmarketPrices?.trendPrice != null
+                                  ? '${card.cardmarketPrices!.trendPrice!.toStringAsFixed(2)} €'
+                                  : 'No disponible'),
+                          style: const TextStyle(
+                            color: Color(0xFF00B4D8),
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                    Container(width: 1, height: 35, color: Colors.white12),
+                    Column(
+                      children: [
+                        const Text(
+                          'PSA 10 (Estimado)',
+                          style: TextStyle(color: Colors.white54, fontSize: 11),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          card.psa10Price != null
+                              ? '${card.psa10Price!.toStringAsFixed(2)} €'
+                              : 'No disponible',
+                          style: const TextStyle(
+                            color: Color(0xFFFFD166),
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 18),
+
+              Row(
+                children: [
+                  Expanded(
+                    flex: 2,
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        _editCard(card);
+                      },
+                      icon: const Icon(Icons.edit, size: 18),
+                      label: const Text('Editar Carta (Foto, Precios...)'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.amber,
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        Navigator.pop(ctx);
+                        _deleteCard(card);
+                      },
+                      icon: const Icon(Icons.delete, color: Colors.redAccent, size: 18),
+                      label: const Text('Eliminar',
+                          style: TextStyle(color: Colors.redAccent, fontSize: 13)),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Colors.redAccent),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   List<PokemonCard> get _filteredCards {
     if (_filterGame == TcgGame.all) return _cards;
     return _cards.where((c) => c.game == _filterGame).toList();
@@ -331,6 +557,8 @@ class _AlbumViewState extends State<AlbumView> {
       itemBuilder: (context, index) {
         return _CardTile(
           card: cards[index],
+          onTap: () => _showCardDetails(cards[index]),
+          onEdit: () => _editCard(cards[index]),
           onDelete: () => _deleteCard(cards[index]),
         );
       },
@@ -341,18 +569,26 @@ class _AlbumViewState extends State<AlbumView> {
 // ── Tarjeta individual en el Álbum ───────────────────────────────────────────
 class _CardTile extends StatelessWidget {
   final PokemonCard card;
+  final VoidCallback onTap;
+  final VoidCallback onEdit;
   final VoidCallback onDelete;
 
-  const _CardTile({required this.card, required this.onDelete});
+  const _CardTile({
+    required this.card,
+    required this.onTap,
+    required this.onEdit,
+    required this.onDelete,
+  });
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
+      onTap: onTap,
       onLongPress: onDelete,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Imagen con badge de franquicia superpuesto
+          // Imagen con badge de franquicia superpuesto y botón de edición
           Expanded(
             child: Stack(
               fit: StackFit.expand,
@@ -386,7 +622,36 @@ class _CardTile extends StatelessWidget {
                             )),
                 ),
 
-                // Badge pequeño de franquicia TCG en la esquina superior
+                // Botón de edición directo en la esquina superior izquierda
+                Positioned(
+                  top: 6,
+                  left: 6,
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: onEdit,
+                      borderRadius: BorderRadius.circular(14),
+                      child: Container(
+                        padding: const EdgeInsets.all(5),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.75),
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: Colors.amber.withValues(alpha: 0.8),
+                            width: 1,
+                          ),
+                        ),
+                        child: const Icon(
+                          Icons.edit,
+                          color: Colors.amber,
+                          size: 13,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+
+                // Badge pequeño de franquicia TCG en la esquina superior derecha
                 Positioned(
                   top: 6,
                   right: 6,

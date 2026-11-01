@@ -194,9 +194,17 @@ class PokemonCard {
     final eur = double.tryParse(prices?['eur']?.toString() ?? '');
     final usd = double.tryParse(prices?['usd']?.toString() ?? '');
 
+    final printedName = json['printed_name'] as String?;
+    final engName = json['name'] as String? ?? 'Carta Magic';
+    final displayName = (printedName != null &&
+            printedName.isNotEmpty &&
+            printedName != engName)
+        ? '$printedName ($engName)'
+        : engName;
+
     return PokemonCard(
       id: 'mtg-${json['id']}',
-      name: json['name'] as String? ?? 'Carta Magic',
+      name: displayName,
       number: json['collector_number']?.toString() ?? '?',
       setName: json['set_name'] as String? ?? 'Magic: The Gathering',
       imageUrl: img,
@@ -211,7 +219,7 @@ class PokemonCard {
   // ──────────────────────────────────────────────────────────────
   // 3. Yu-Gi-Oh! (YGOPRODeck)
   // ──────────────────────────────────────────────────────────────
-  factory PokemonCard.fromYugioh(Map<String, dynamic> json) {
+  factory PokemonCard.fromYugioh(Map<String, dynamic> json, {String? language}) {
     final images = json['card_images'] as List?;
     final imgUrl = (images?.firstOrNull as Map<String, dynamic>?)?['image_url']
             as String? ??
@@ -236,7 +244,7 @@ class PokemonCard {
       cardmarketPrices: cmPrice != null
           ? CardmarketPrices(averageSellPrice: cmPrice)
           : null,
-      language: 'en',
+      language: language ?? 'en',
     );
   }
 
@@ -310,6 +318,34 @@ class PokemonCard {
     );
   }
 
+  PokemonCard copyWith({
+    String? id,
+    String? name,
+    String? number,
+    String? setName,
+    String? imageUrl,
+    TcgGame? game,
+    CardmarketPrices? cardmarketPrices,
+    double? psa10Price,
+    int? setPrintedTotal,
+    int? setTotal,
+    String? language,
+  }) {
+    return PokemonCard(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      number: number ?? this.number,
+      setName: setName ?? this.setName,
+      imageUrl: imageUrl ?? this.imageUrl,
+      game: game ?? this.game,
+      cardmarketPrices: cardmarketPrices ?? this.cardmarketPrices,
+      psa10Price: psa10Price ?? this.psa10Price,
+      setPrintedTotal: setPrintedTotal ?? this.setPrintedTotal,
+      setTotal: setTotal ?? this.setTotal,
+      language: language ?? this.language,
+    );
+  }
+
   PokemonCard copyWithDetail({
     String? setName,
     CardmarketPrices? cardmarketPrices,
@@ -318,18 +354,13 @@ class PokemonCard {
     String? language,
     TcgGame? game,
   }) {
-    return PokemonCard(
-      id: id,
-      name: name,
-      number: number,
-      setName: setName ?? this.setName,
-      imageUrl: imageUrl,
-      game: game ?? this.game,
-      cardmarketPrices: cardmarketPrices ?? this.cardmarketPrices,
-      psa10Price: psa10Price,
-      setPrintedTotal: setPrintedTotal ?? this.setPrintedTotal,
-      setTotal: setTotal ?? this.setTotal,
-      language: language ?? this.language,
+    return copyWith(
+      setName: setName,
+      cardmarketPrices: cardmarketPrices,
+      setPrintedTotal: setPrintedTotal,
+      setTotal: setTotal,
+      language: language,
+      game: game,
     );
   }
 

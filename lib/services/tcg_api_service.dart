@@ -46,24 +46,25 @@ class TcgApiService {
       case TcgGame.pokemon:
         return _searchPokemonSafe(cleanQuery, number: number, language: language);
       case TcgGame.magic:
-        return _searchMagicSafe(cleanQuery.isNotEmpty ? cleanQuery : (number ?? ''));
+        return _searchMagicSafe(cleanQuery.isNotEmpty ? cleanQuery : (number ?? ''), language: language);
       case TcgGame.yugioh:
-        return _searchYugiohSafe(cleanQuery.isNotEmpty ? cleanQuery : (number ?? ''));
+        return _searchYugiohSafe(cleanQuery.isNotEmpty ? cleanQuery : (number ?? ''), language: language);
       case TcgGame.digimon:
-        return _searchDigimonSafe(cleanQuery.isNotEmpty ? cleanQuery : (number ?? ''));
+        return _searchDigimonSafe(cleanQuery.isNotEmpty ? cleanQuery : (number ?? ''), language: language);
       case TcgGame.onepiece:
-        return _searchOnePieceSafe(cleanQuery.isNotEmpty ? cleanQuery : (number ?? ''));
+        return _searchOnePieceSafe(cleanQuery.isNotEmpty ? cleanQuery : (number ?? ''), language: language);
       case TcgGame.lorcana:
-        return _searchLorcanaSafe(cleanQuery.isNotEmpty ? cleanQuery : (number ?? ''));
+        return _searchLorcanaSafe(cleanQuery.isNotEmpty ? cleanQuery : (number ?? ''), language: language);
       case TcgGame.all:
       default:
         // Consulta todos los TCGs en paralelo con límite de tiempo
         final futures = <Future<List<PokemonCard>>>[
           _searchPokemonSafe(cleanQuery, number: number, language: language),
-          _searchMagicSafe(cleanQuery.isNotEmpty ? cleanQuery : (number ?? '')),
-          _searchYugiohSafe(cleanQuery.isNotEmpty ? cleanQuery : (number ?? '')),
-          _searchDigimonSafe(cleanQuery.isNotEmpty ? cleanQuery : (number ?? '')),
-          _searchOnePieceSafe(cleanQuery.isNotEmpty ? cleanQuery : (number ?? '')),
+          _searchMagicSafe(cleanQuery.isNotEmpty ? cleanQuery : (number ?? ''), language: language),
+          _searchYugiohSafe(cleanQuery.isNotEmpty ? cleanQuery : (number ?? ''), language: language),
+          _searchDigimonSafe(cleanQuery.isNotEmpty ? cleanQuery : (number ?? ''), language: language),
+          _searchOnePieceSafe(cleanQuery.isNotEmpty ? cleanQuery : (number ?? ''), language: language),
+          _searchLorcanaSafe(cleanQuery.isNotEmpty ? cleanQuery : (number ?? ''), language: language),
         ];
 
         final resultsList = await Future.wait(futures);
@@ -306,11 +307,50 @@ class TcgApiService {
   // ──────────────────────────────────────────────────────────────────────────
   // 2. MAGIC: THE GATHERING (Scryfall API)
   // ──────────────────────────────────────────────────────────────────────────
-  Future<List<PokemonCard>> _searchMagicSafe(String query) async {
-    if (query.trim().isEmpty) return [];
+  Future<List<PokemonCard>> _searchMagicSafe(
+    String query, {
+    CardLanguage language = CardLanguage.auto,
+  }) async {
+    final clean = query.trim();
+    if (clean.isEmpty) return [];
 
-    final isNumeric = RegExp(r'^\d+$').hasMatch(query.trim());
-    final scryfallQuery = isNumeric ? 'number:${query.trim()}' : query.trim();
+    final isNumeric = RegExp(r'^\d+$').hasMatch(clean);
+
+    String langFilter = '';
+    switch (language) {
+      case CardLanguage.es:
+        langFilter = 'lang:es';
+        break;
+      case CardLanguage.ja:
+        langFilter = 'lang:ja';
+        break;
+      case CardLanguage.ko:
+        langFilter = 'lang:ko';
+        break;
+      case CardLanguage.zh:
+        langFilter = '(lang:zhs or lang:zht)';
+        break;
+      case CardLanguage.en:
+        langFilter = 'lang:en';
+        break;
+      case CardLanguage.auto:
+        if (RegExp(r'[\u3040-\u30FF]').hasMatch(clean)) {
+          langFilter = 'lang:ja';
+        } else if (RegExp(r'[\uAC00-\uD7AF]').hasMatch(clean)) {
+          langFilter = 'lang:ko';
+        } else if (RegExp(r'[\u4E00-\u9FFF]').hasMatch(clean)) {
+          langFilter = '(lang:zhs or lang:zht)';
+        } else {
+          langFilter = 'lang:any';
+        }
+        break;
+    }
+
+    String scryfallQuery = isNumeric ? 'number:$clean' : clean;
+    if (langFilter.isNotEmpty) {
+      scryfallQuery = '$scryfallQuery $langFilter';
+    }
+
     final url = Uri.parse(
       'https://api.scryfall.com/cards/search?q=${Uri.encodeComponent(scryfallQuery)}',
     );
@@ -327,12 +367,36 @@ class TcgApiService {
       if (res.statusCode == 200) {
         final Map<String, dynamic> body = json.decode(res.body);
         final List<dynamic>? data = body['data'] as List?;
-        if (data != null) {
+        if (data != null && data.isNotEmpty) {
           return data
               .take(25)
               .map((item) =>
                   PokemonCard.fromScryfall(item as Map<String, dynamic>))
               .toList();
+        }
+      }
+
+      // Si no hubo resultados con el filtro específico de idioma, reintentar con lang:any
+      if (langFilter != 'lang:any') {
+        final fallbackQuery = isNumeric ? 'number:$clean' : '$clean lang:any';
+        final fallbackUrl = Uri.parse(
+          'https://api.scryfall.com/cards/search?q=${Uri.encodeComponent(fallbackQuery)}',
+        );
+        final fallbackRes = await http.get(fallbackUrl, headers: {
+          'User-Agent': 'TcgAlbum/1.0',
+          'Accept': 'application/json',
+        }).timeout(const Duration(seconds: 4));
+
+        if (fallbackRes.statusCode == 200) {
+          final Map<String, dynamic> body = json.decode(fallbackRes.body);
+          final List<dynamic>? data = body['data'] as List?;
+          if (data != null) {
+            return data
+                .take(25)
+                .map((item) =>
+                    PokemonCard.fromScryfall(item as Map<String, dynamic>))
+                .toList();
+          }
         }
       }
       return [];
@@ -345,27 +409,56 @@ class TcgApiService {
   // ──────────────────────────────────────────────────────────────────────────
   // 3. YU-GI-OH! (YGOPRODeck API)
   // ──────────────────────────────────────────────────────────────────────────
-  Future<List<PokemonCard>> _searchYugiohSafe(String query) async {
+  Future<List<PokemonCard>> _searchYugiohSafe(
+    String query, {
+    CardLanguage language = CardLanguage.auto,
+  }) async {
     final clean = query.trim();
     if (clean.isEmpty) return [];
 
     final isPasscode = RegExp(r'^\d{7,8}$').hasMatch(clean);
+    final langParam = language == CardLanguage.es ? '&language=es' : '';
+
     final url = isPasscode
-        ? Uri.parse('https://db.ygoprodeck.com/api/v7/cardinfo.php?id=$clean')
+        ? Uri.parse('https://db.ygoprodeck.com/api/v7/cardinfo.php?id=$clean$langParam')
         : Uri.parse(
-            'https://db.ygoprodeck.com/api/v7/cardinfo.php?fname=${Uri.encodeComponent(clean)}');
+            'https://db.ygoprodeck.com/api/v7/cardinfo.php?fname=${Uri.encodeComponent(clean)}$langParam');
 
     try {
       final res = await http.get(url, headers: _headers).timeout(const Duration(seconds: 5));
       if (res.statusCode == 200) {
         final Map<String, dynamic> body = json.decode(res.body);
         final List<dynamic>? data = body['data'] as List?;
-        if (data != null) {
+        if (data != null && data.isNotEmpty) {
           return data
               .take(25)
-              .map((item) =>
-                  PokemonCard.fromYugioh(item as Map<String, dynamic>))
+              .map((item) => PokemonCard.fromYugioh(
+                    item as Map<String, dynamic>,
+                    language: language.apiCode,
+                  ))
               .toList();
+        }
+      }
+
+      // Si no encuentra con el parámetro de idioma, reintentar sin él (inglés / universal)
+      if (langParam.isNotEmpty) {
+        final fallbackUrl = isPasscode
+            ? Uri.parse('https://db.ygoprodeck.com/api/v7/cardinfo.php?id=$clean')
+            : Uri.parse(
+                'https://db.ygoprodeck.com/api/v7/cardinfo.php?fname=${Uri.encodeComponent(clean)}');
+        final fallbackRes = await http.get(fallbackUrl, headers: _headers).timeout(const Duration(seconds: 4));
+        if (fallbackRes.statusCode == 200) {
+          final Map<String, dynamic> body = json.decode(fallbackRes.body);
+          final List<dynamic>? data = body['data'] as List?;
+          if (data != null) {
+            return data
+                .take(25)
+                .map((item) => PokemonCard.fromYugioh(
+                      item as Map<String, dynamic>,
+                      language: 'en',
+                    ))
+                .toList();
+          }
         }
       }
       return [];
@@ -378,7 +471,10 @@ class TcgApiService {
   // ──────────────────────────────────────────────────────────────────────────
   // 4. DIGIMON CARD GAME (DigimonCard.io API)
   // ──────────────────────────────────────────────────────────────────────────
-  Future<List<PokemonCard>> _searchDigimonSafe(String query) async {
+  Future<List<PokemonCard>> _searchDigimonSafe(
+    String query, {
+    CardLanguage language = CardLanguage.auto,
+  }) async {
     final clean = query.trim();
     if (clean.isEmpty) return [];
 
@@ -412,7 +508,10 @@ class TcgApiService {
   // ──────────────────────────────────────────────────────────────────────────
   // 5. ONE PIECE CARD GAME (OPTCG API)
   // ──────────────────────────────────────────────────────────────────────────
-  Future<List<PokemonCard>> _searchOnePieceSafe(String query) async {
+  Future<List<PokemonCard>> _searchOnePieceSafe(
+    String query, {
+    CardLanguage language = CardLanguage.auto,
+  }) async {
     final clean = query.trim();
     if (clean.isEmpty) return [];
 
@@ -445,7 +544,10 @@ class TcgApiService {
   // ──────────────────────────────────────────────────────────────────────────
   // 6. DISNEY LORCANA (Lorcana API)
   // ──────────────────────────────────────────────────────────────────────────
-  Future<List<PokemonCard>> _searchLorcanaSafe(String query) async {
+  Future<List<PokemonCard>> _searchLorcanaSafe(
+    String query, {
+    CardLanguage language = CardLanguage.auto,
+  }) async {
     final clean = query.trim();
     if (clean.isEmpty) return [];
 
