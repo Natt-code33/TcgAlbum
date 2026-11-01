@@ -14,6 +14,7 @@ import '../models/pokemon_card.dart';
 import '../services/album_storage_service.dart';
 import '../services/ocr_service.dart';
 import '../services/tcg_api_service.dart';
+import '../services/image_matching_service.dart';
 import 'manual_card_view.dart';
 
 class ScannerView extends StatefulWidget {
@@ -29,6 +30,7 @@ class _ScannerViewState extends State<ScannerView> {
   final TcgApiService _apiService = TcgApiService();
   final AlbumStorageService _storage = AlbumStorageService();
   final ImagePicker _picker = ImagePicker();
+  final ImageMatchingService _imageMatcher = ImageMatchingService();
 
   // ── Estado ────────────────────────────────────────────────────────────────
   File? _capturedImage;
@@ -36,6 +38,8 @@ class _ScannerViewState extends State<ScannerView> {
   List<PokemonCard> _searchResults = [];
   PokemonCard? _selectedCard;
   bool _isProcessing = false;
+  bool _isMatchingImages = false;
+  Map<String, int> _visualScores = {};
   String? _errorMessage;
   TcgGame _selectedGame = TcgGame.all;
   CardLanguage _selectedLanguage = CardLanguage.auto;
@@ -66,6 +70,8 @@ class _ScannerViewState extends State<ScannerView> {
       setState(() {
         _capturedImage = imageFile;
         _isProcessing = true;
+        _isMatchingImages = false;
+        _visualScores = {};
         _errorMessage = null;
         _searchResults = [];
         _selectedCard = null;
@@ -171,10 +177,72 @@ class _ScannerViewState extends State<ScannerView> {
         _selectedCard = autoSelected;
         _isProcessing = false;
       });
+
+      // Si tenemos una foto capturada y hay múltiples candidatas,
+      // comparar el arte visual para clasificar y destacar la carta idéntica.
+      if (_capturedImage != null && results.length > 1) {
+        _runVisualMatching(results);
+      }
     } on TcgApiException catch (e) {
       _showError(e.message);
     } catch (e) {
       _showError('Error de conexión: $e');
+    }
+  }
+
+  /// Emparejamiento visual en segundo plano:
+  /// Compara el dibujo central de la foto con cada una de las candidatas encontradas.
+  Future<void> _runVisualMatching(List<PokemonCard> candidates) async {
+    if (_capturedImage == null || !mounted) return;
+
+    setState(() => _isMatchingImages = true);
+
+    try {
+      final rankedResults = await _imageMatcher.rankCardsByVisualSimilarity(
+        userPhotoFile: _capturedImage!,
+        candidateCards: candidates,
+        maxCandidatesToCompare: 16,
+      );
+
+      if (!mounted) return;
+
+      final scores = <String, int>{};
+      for (final r in rankedResults) {
+        if (r.matchPercentage > 0) {
+          scores[r.card.id] = r.matchPercentage;
+        }
+      }
+
+      final sortedCards = rankedResults.map((r) => r.card).toList();
+      final bestMatch = rankedResults.first;
+
+      setState(() {
+        _isMatchingImages = false;
+        _visualScores = scores;
+        _searchResults = sortedCards;
+
+        // Si la mejor coincidencia visual es notable (>= 50%), seleccionarla
+        if (bestMatch.similarity >= 0.50) {
+          _selectedCard = bestMatch.card;
+        }
+      });
+
+      // Si es Pokémon y no tiene precio detallado, cargarlo
+      if (_selectedCard != null &&
+          _selectedCard!.game == TcgGame.pokemon &&
+          _selectedCard!.cardmarketPrices == null) {
+        final detail = await _apiService.fetchCardDetail(
+          _selectedCard!.id,
+          lang: _selectedCard!.language ?? _selectedLanguage.apiCode,
+        );
+        if (mounted && detail != null && _selectedCard?.id == detail.id) {
+          setState(() => _selectedCard = detail);
+        }
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() => _isMatchingImages = false);
+      }
     }
   }
 
@@ -765,9 +833,42 @@ class _ScannerViewState extends State<ScannerView> {
           ],
         ),
         const SizedBox(height: 10),
+
+        if (_isMatchingImages) ...[
+          Container(
+            margin: const EdgeInsets.only(bottom: 10),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: Colors.amber.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.amber.withValues(alpha: 0.35)),
+            ),
+            child: const Row(
+              children: [
+                SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.amber,
+                  ),
+                ),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    '🎨 Comparando arte de ilustración con tu foto...',
+                    style: TextStyle(color: Colors.amber, fontSize: 12),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+
         ..._searchResults.map((card) => _ResultCard(
               card: card,
               isSelected: _selectedCard?.id == card.id,
+              visualScore: _visualScores[card.id],
               onSelect: () => _selectCard(card),
             )),
       ],
@@ -865,6 +966,11 @@ class _ScannerViewState extends State<ScannerView> {
               children: [
                 _InfoRow(label: 'Nombre', value: card.name),
                 _InfoRow(label: 'Juego / TCG', value: '${card.game.icon} ${card.game.label}'),
+                if (_visualScores.containsKey(card.id))
+                  _InfoRow(
+                    label: 'Coincidencia de arte',
+                    value: '🎨 ${_visualScores[card.id]}% de parecido visual',
+                  ),
                 if (card.setName.isNotEmpty)
                   _InfoRow(label: 'Set / Colección', value: card.setName),
                 _InfoRow(
@@ -915,11 +1021,13 @@ class _ScannerViewState extends State<ScannerView> {
 class _ResultCard extends StatelessWidget {
   final PokemonCard card;
   final bool isSelected;
+  final int? visualScore;
   final VoidCallback onSelect;
 
   const _ResultCard({
     required this.card,
     required this.isSelected,
+    this.visualScore,
     required this.onSelect,
   });
 
@@ -998,6 +1106,48 @@ class _ResultCard extends StatelessWidget {
                             ),
                           ),
                         ),
+                        if (visualScore != null && visualScore! > 0) ...[
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 6, vertical: 2),
+                            margin: const EdgeInsets.only(right: 6),
+                            decoration: BoxDecoration(
+                              color: (visualScore! >= 65
+                                      ? Colors.green
+                                      : (visualScore! >= 45
+                                          ? Colors.orange
+                                          : Colors.blueGrey))
+                                  .withValues(alpha: 0.25),
+                              borderRadius: BorderRadius.circular(4),
+                              border: Border.all(
+                                color: visualScore! >= 65
+                                    ? Colors.greenAccent
+                                    : (visualScore! >= 45
+                                        ? Colors.orangeAccent
+                                        : Colors.white38),
+                                width: 0.8,
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Text('🎨 ', style: TextStyle(fontSize: 9)),
+                                Text(
+                                  '$visualScore%',
+                                  style: TextStyle(
+                                    color: visualScore! >= 65
+                                        ? Colors.greenAccent
+                                        : (visualScore! >= 45
+                                            ? Colors.orangeAccent
+                                            : Colors.white70),
+                                    fontSize: 9.5,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                         Container(
                           padding: const EdgeInsets.symmetric(
                               horizontal: 6, vertical: 2),
