@@ -1,0 +1,37 @@
+name: dashboard_personal
+description: "Álbum de cartas Pokémon TCG con OCR, API y gestión de precios."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+
+  # ── OCR offline con Google ML Kit ──────────────────────────────────────────
+  google_mlkit_text_recognition: ^0.14.0
+
+  # ── Captura de imagen desde cámara o galería ───────────────────────────────
+  image_picker: ^1.1.2
+
+  # ── Peticiones HTTP a la API de Pokémon TCG ───────────────────────────────
+  http: ^1.2.2
+
+  # ── Almacenamiento local persistente (álbum no se borra al cerrar) ─────────
+  shared_preferences: ^2.3.2
+
+  # ── Caché de imágenes de red ──────────────────────────────────────────────
+  cached_network_image: ^3.4.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
