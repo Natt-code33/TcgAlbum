@@ -44,13 +44,8 @@ enum TcgGame {
 
 /// Precios de mercado (Cardmarket en € y tendencias en $/€).
 class CardmarketPrices {
-  /// Precio medio en euros (Raw).
   final double? averageSellPrice;
-
-  /// Precio tendencia.
   final double? trendPrice;
-
-  /// Precio estimado de PSA 10.
   final double? psa10Price;
 
   const CardmarketPrices({
@@ -76,37 +71,64 @@ class CardmarketPrices {
       };
 }
 
+/// Modelo de un álbum de cartas (soporta múltiples álbumes).
+class TcgAlbum {
+  final String id;
+  final String name;
+  final DateTime createdAt;
+  final List<PokemonCard> cards;
+
+  TcgAlbum({
+    required this.id,
+    required this.name,
+    DateTime? createdAt,
+    List<PokemonCard>? cards,
+  })  : createdAt = createdAt ?? DateTime.now(),
+        cards = cards ?? [];
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'createdAt': createdAt.toIso8601String(),
+        'cards': cards.map((c) => c.toJson()).toList(),
+      };
+
+  factory TcgAlbum.fromJson(Map<String, dynamic> json) {
+    final cardsRaw = json['cards'] as List<dynamic>? ?? [];
+    return TcgAlbum(
+      id: json['id'] as String? ?? 'album_0',
+      name: json['name'] as String? ?? 'Mi Álbum',
+      createdAt: json['createdAt'] != null
+          ? DateTime.tryParse(json['createdAt'] as String) ?? DateTime.now()
+          : DateTime.now(),
+      cards: cardsRaw
+          .map((e) => PokemonCard.fromLocalJson(e as Map<String, dynamic>))
+          .toList(),
+    );
+  }
+
+  TcgAlbum copyWith({String? name}) {
+    return TcgAlbum(
+      id: id,
+      name: name ?? this.name,
+      createdAt: createdAt,
+      cards: List.from(cards),
+    );
+  }
+}
+
 /// Modelo universal para cartas de cualquier TCG en el álbum.
 class PokemonCard {
-  /// ID único de la carta.
   final String id;
-
-  /// Nombre del personaje, carta o hechizo.
   final String name;
-
-  /// Número de colección o referencia (ej. "140/195", "070/280", "LOB-005", "ST1-03").
   final String number;
-
-  /// Nombre del set o expansión.
   final String setName;
-
-  /// URL de la imagen en alta resolución o ruta de archivo local.
   final String imageUrl;
-
-  /// Franquicia / Juego TCG al que pertenece la carta.
   final TcgGame game;
-
-  /// Precios de Cardmarket (en €).
   final CardmarketPrices? cardmarketPrices;
-
-  /// Precio PSA 10 estimado.
   final double? psa10Price;
-
-  /// Total de cartas impresas en el set (ej: 195 en 140/195).
   final int? setPrintedTotal;
   final int? setTotal;
-
-  /// Idioma de la carta ('en', 'es', 'ja', 'ko', 'zh-tw').
   final String? language;
 
   const PokemonCard({
@@ -177,6 +199,39 @@ class PokemonCard {
   }
 
   // ──────────────────────────────────────────────────────────────
+  // 1b. Pokémon (pokemontcg.io API oficial)
+  // ──────────────────────────────────────────────────────────────
+  factory PokemonCard.fromPokemonTcgIo(Map<String, dynamic> json) {
+    final images = json['images'] as Map<String, dynamic>?;
+    final img = images?['large'] as String? ??
+        images?['small'] as String? ??
+        '';
+
+    final setData = json['set'] as Map<String, dynamic>?;
+    final cmPrices = json['cardmarket'] as Map<String, dynamic>?;
+    final cmPricesMap = cmPrices?['prices'] as Map<String, dynamic>?;
+
+    return PokemonCard(
+      id: json['id'] as String? ?? '',
+      name: json['name'] as String? ?? 'Carta Pokémon',
+      number: json['number']?.toString() ?? '?',
+      setName: setData?['name'] as String? ?? '',
+      imageUrl: img,
+      game: TcgGame.pokemon,
+      cardmarketPrices: cmPricesMap != null
+          ? CardmarketPrices(
+              averageSellPrice:
+                  (cmPricesMap['averageSellPrice'] as num?)?.toDouble(),
+              trendPrice: (cmPricesMap['trendPrice'] as num?)?.toDouble(),
+            )
+          : null,
+      setPrintedTotal: (setData?['printedTotal'] as num?)?.toInt(),
+      setTotal: (setData?['total'] as num?)?.toInt(),
+      language: 'en',
+    );
+  }
+
+  // ──────────────────────────────────────────────────────────────
   // 2. Magic: The Gathering (Scryfall)
   // ──────────────────────────────────────────────────────────────
   factory PokemonCard.fromScryfall(Map<String, dynamic> json) {
@@ -219,7 +274,8 @@ class PokemonCard {
   // ──────────────────────────────────────────────────────────────
   // 3. Yu-Gi-Oh! (YGOPRODeck)
   // ──────────────────────────────────────────────────────────────
-  factory PokemonCard.fromYugioh(Map<String, dynamic> json, {String? language}) {
+  factory PokemonCard.fromYugioh(Map<String, dynamic> json,
+      {String? language}) {
     final images = json['card_images'] as List?;
     final imgUrl = (images?.firstOrNull as Map<String, dynamic>?)?['image_url']
             as String? ??
@@ -237,13 +293,14 @@ class PokemonCard {
     return PokemonCard(
       id: 'ygo-${json['id']}',
       name: json['name'] as String? ?? 'Carta Yu-Gi-Oh!',
-      number: firstSet?['set_code'] as String? ?? json['id']?.toString() ?? '?',
+      number: firstSet?['set_code'] as String? ??
+          json['id']?.toString() ??
+          '?',
       setName: firstSet?['set_name'] as String? ?? 'Yu-Gi-Oh!',
       imageUrl: imgUrl,
       game: TcgGame.yugioh,
-      cardmarketPrices: cmPrice != null
-          ? CardmarketPrices(averageSellPrice: cmPrice)
-          : null,
+      cardmarketPrices:
+          cmPrice != null ? CardmarketPrices(averageSellPrice: cmPrice) : null,
       language: language ?? 'en',
     );
   }
@@ -294,9 +351,8 @@ class PokemonCard {
       setName: json['set_name'] as String? ?? 'One Piece Card Game',
       imageUrl: img,
       game: TcgGame.onepiece,
-      cardmarketPrices: price != null
-          ? CardmarketPrices(averageSellPrice: price)
-          : null,
+      cardmarketPrices:
+          price != null ? CardmarketPrices(averageSellPrice: price) : null,
       language: 'en',
     );
   }
@@ -365,7 +421,7 @@ class PokemonCard {
   }
 
   // ──────────────────────────────────────────────────────────────
-  // toJson: serializa la carta para guardarla en SharedPreferences.
+  // toJson / fromLocalJson
   // ──────────────────────────────────────────────────────────────
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -381,10 +437,8 @@ class PokemonCard {
         'language': language,
       };
 
-  /// Construye una [PokemonCard] desde el JSON guardado localmente.
   factory PokemonCard.fromLocalJson(Map<String, dynamic> json) {
-    final pricesData =
-        json['cardmarketPrices'] as Map<String, dynamic>?;
+    final pricesData = json['cardmarketPrices'] as Map<String, dynamic>?;
 
     return PokemonCard(
       id: json['id'] as String? ?? '',
@@ -402,23 +456,9 @@ class PokemonCard {
     );
   }
 
-  /// Crea una copia de la carta con el precio PSA 10 actualizado.
   PokemonCard copyWithPsa10(double price) {
-    return PokemonCard(
-      id: id,
-      name: name,
-      number: number,
-      setName: setName,
-      imageUrl: imageUrl,
-      game: game,
-      cardmarketPrices: cardmarketPrices,
-      psa10Price: price,
-      setPrintedTotal: setPrintedTotal,
-      setTotal: setTotal,
-      language: language,
-    );
+    return copyWith(psa10Price: price);
   }
 }
 
-/// Alias para uso universal en cualquier juego TCG.
 typedef TcgCard = PokemonCard;

@@ -390,6 +390,9 @@ class _ManualCardViewState extends State<ManualCardView> {
                   ),
                 ),
               ),
+
+              // Espacio amplio al final para evitar que quede pegado al borde
+              const SizedBox(height: 50),
             ],
           ),
         ),

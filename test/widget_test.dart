@@ -12,8 +12,9 @@ void main() {
   testWidgets('App loads smoke test', (WidgetTester tester) async {
     // Build our app and trigger a frame.
     await tester.pumpWidget(const PokemonAlbumApp());
+    await tester.pump(const Duration(milliseconds: 500));
 
-    // Verify that the title appears.
-    expect(find.text('Mi Álbum TCG'), findsOneWidget);
+    // Verify that the title / album dropdown appears.
+    expect(find.text('Mi Álbum'), findsOneWidget);
   });
 }

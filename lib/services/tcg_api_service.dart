@@ -1,9 +1,9 @@
 // ============================================================
 // services/tcg_api_service.dart
 // Servicio universal de consulta para juegos de cartas coleccionables:
-// - Pokémon TCG (TCGdex API)
-// - Magic: The Gathering (Scryfall API)
-// - Yu-Gi-Oh! (YGOPRODeck API)
+// - Pokémon TCG (TCGdex API + Pokémon TCG API oficial pokemontcg.io)
+// - Magic: The Gathering (Scryfall API con soporte multidioma)
+// - Yu-Gi-Oh! (YGOPRODeck API con traducción)
 // - Digimon Card Game (DigimonCard.io API)
 // - One Piece Card Game (OPTCG API)
 // - Disney Lorcana (Lorcana API)
@@ -25,6 +25,7 @@ class TcgApiException implements Exception {
 
 class TcgApiService {
   static const _tcgdexBase = 'https://api.tcgdex.net/v2';
+  static const _pokemonTcgIoBase = 'https://api.pokemontcg.io/v2';
 
   static const Map<String, String> _headers = {
     'Accept': 'application/json',
@@ -33,6 +34,8 @@ class TcgApiService {
 
   // ──────────────────────────────────────────────────────────────────────────
   // BÚSQUEDA UNIVERSAL (Multi-TCG)
+  // Cuando se selecciona un juego específico, SOLAMENTE consulta ese juego
+  // para evitar confusiones de TCG.
   // ──────────────────────────────────────────────────────────────────────────
   Future<List<PokemonCard>> searchUniversal({
     required String query,
@@ -77,7 +80,7 @@ class TcgApiService {
   }
 
   // ──────────────────────────────────────────────────────────────────────────
-  // 1. POKÉMON (TCGdex)
+  // 1. POKÉMON (TCGdex multidioma + fallback pokemontcg.io oficial)
   // ──────────────────────────────────────────────────────────────────────────
   Future<List<PokemonCard>> _searchPokemonSafe(
     String query, {
@@ -85,20 +88,31 @@ class TcgApiService {
     CardLanguage language = CardLanguage.auto,
   }) async {
     try {
+      List<PokemonCard> results = [];
+
       if (query.isNotEmpty && number != null) {
-        return await searchByNameAndNumber(query, number, language: language);
+        results = await searchByNameAndNumber(query, number, language: language);
       } else if (query.isNotEmpty) {
-        return await searchByName(query, language: language);
+        results = await searchByName(query, language: language);
       } else if (number != null) {
-        return await searchByCollectionNumber(number, language: language);
+        results = await searchByCollectionNumber(number, language: language);
       }
-      return [];
+
+      // Si TCGdex no arrojó resultados o arrojó muy pocos, consultar pokemontcg.io (Base completa)
+      if (results.isEmpty) {
+        final ioResults = await _searchPokemonTcgIo(query: query, number: number);
+        if (ioResults.isNotEmpty) return ioResults;
+      }
+
+      return results;
     } catch (e) {
       developer.log('Error buscando Pokémon: $e', name: 'TcgApiService');
       return [];
     }
   }
 
+  /// Búsqueda robusta por nombre: consulta el idioma solicitado y simultáneamente inglés
+  /// para evitar que cartas en japonés, coreano, chino, etc. no aparezcan.
   Future<List<PokemonCard>> searchByName(
     String query, {
     CardLanguage language = CardLanguage.auto,
@@ -108,42 +122,41 @@ class TcgApiService {
     if (coreName.isEmpty) return [];
 
     final encodedName = Uri.encodeComponent(coreName);
-    final langCode =
-        effectiveLang.apiCode == 'auto' ? 'en' : effectiveLang.apiCode;
-    final url = Uri.parse('$_tcgdexBase/$langCode/cards?name=$encodedName');
+    final targetLang = effectiveLang.apiCode == 'auto' ? 'es' : effectiveLang.apiCode;
 
-    try {
-      final res = await http.get(url, headers: _headers).timeout(const Duration(seconds: 5));
-      if (res.statusCode == 200) {
-        final List<dynamic> data = json.decode(res.body);
-        final cards = data
-            .map((item) => PokemonCard.fromTcgdexSummary(
-                  item as Map<String, dynamic>,
-                  language: langCode,
-                ))
-            .toList();
+    final urlsToTry = <String>{
+      '$_tcgdexBase/$targetLang/cards?name=$encodedName',
+      '$_tcgdexBase/en/cards?name=$encodedName',
+    };
 
-        if (cards.isNotEmpty) return cards;
-      }
-
-      if (langCode != 'en') {
-        final fallbackUrl =
-            Uri.parse('$_tcgdexBase/en/cards?name=$encodedName');
-        final fallbackRes = await http.get(fallbackUrl, headers: _headers).timeout(const Duration(seconds: 4));
-        if (fallbackRes.statusCode == 200) {
-          final List<dynamic> data = json.decode(fallbackRes.body);
-          return data
-              .map((item) => PokemonCard.fromTcgdexSummary(
-                    item as Map<String, dynamic>,
-                    language: 'en',
-                  ))
-              .toList();
-        }
-      }
-      return [];
-    } catch (e) {
-      return [];
+    if (targetLang != 'es') {
+      urlsToTry.add('$_tcgdexBase/es/cards?name=$encodedName');
     }
+
+    final allCards = <PokemonCard>[];
+    final seenIds = <String>{};
+
+    for (final urlStr in urlsToTry) {
+      try {
+        final res = await http.get(Uri.parse(urlStr), headers: _headers).timeout(const Duration(seconds: 4));
+        if (res.statusCode == 200) {
+          final List<dynamic> data = json.decode(res.body);
+          for (final item in data) {
+            final card = PokemonCard.fromTcgdexSummary(
+              item as Map<String, dynamic>,
+              language: targetLang,
+            );
+            if (!seenIds.contains(card.id)) {
+              seenIds.add(card.id);
+              allCards.add(card);
+            }
+          }
+          if (allCards.isNotEmpty) break;
+        }
+      } catch (_) {}
+    }
+
+    return allCards;
   }
 
   Future<List<PokemonCard>> searchByNameAndNumber(
@@ -151,8 +164,7 @@ class TcgApiService {
     String collectionNumber, {
     CardLanguage language = CardLanguage.auto,
   }) async {
-    final nameResults =
-        await searchByName(pokemonName, language: language);
+    final nameResults = await searchByName(pokemonName, language: language);
     final parts = collectionNumber.split('/');
     final rawNumber = parts[0].replaceAll(RegExp(r'[^\d]'), '').trim();
     final intNumber = int.tryParse(rawNumber);
@@ -184,8 +196,7 @@ class TcgApiService {
         lang: exactMatches.first.language ?? 'en',
       );
       final finalFirst = detail ?? exactMatches.first;
-      final remainingExact =
-          exactMatches.skip(1).toList();
+      final remainingExact = exactMatches.skip(1).toList();
       return [finalFirst, ...remainingExact, ...otherResults];
     }
 
@@ -209,8 +220,7 @@ class TcgApiService {
 
     if (rawNumber.isEmpty) return [];
 
-    final langCode =
-        language.apiCode == 'auto' ? 'en' : language.apiCode;
+    final langCode = language.apiCode == 'auto' ? 'en' : language.apiCode;
 
     final candidateNumbers = <String>{rawNumber};
     if (intNumber != null) {
@@ -221,26 +231,30 @@ class TcgApiService {
     final allMatchedCards = <PokemonCard>[];
     final seenIds = <String>{};
 
-    for (final numCandidate in candidateNumbers) {
-      final url =
-          Uri.parse('$_tcgdexBase/$langCode/cards?localId=$numCandidate');
+    // Buscar en el idioma seleccionado y también en inglés
+    final langsToSearch = {langCode, 'en', 'es'};
 
-      try {
-        final res = await http.get(url, headers: _headers).timeout(const Duration(seconds: 4));
-        if (res.statusCode == 200) {
-          final List<dynamic> data = json.decode(res.body);
-          for (final item in data) {
-            final card = PokemonCard.fromTcgdexSummary(
-              item as Map<String, dynamic>,
-              language: langCode,
-            );
-            if (!seenIds.contains(card.id)) {
-              seenIds.add(card.id);
-              allMatchedCards.add(card);
+    for (final l in langsToSearch) {
+      for (final numCandidate in candidateNumbers) {
+        final url = Uri.parse('$_tcgdexBase/$l/cards?localId=$numCandidate');
+        try {
+          final res = await http.get(url, headers: _headers).timeout(const Duration(seconds: 4));
+          if (res.statusCode == 200) {
+            final List<dynamic> data = json.decode(res.body);
+            for (final item in data) {
+              final card = PokemonCard.fromTcgdexSummary(
+                item as Map<String, dynamic>,
+                language: l,
+              );
+              if (!seenIds.contains(card.id)) {
+                seenIds.add(card.id);
+                allMatchedCards.add(card);
+              }
             }
           }
-        }
-      } catch (_) {}
+        } catch (_) {}
+      }
+      if (allMatchedCards.isNotEmpty && totalInSet == null) break;
     }
 
     if (totalInSet != null) {
@@ -267,18 +281,50 @@ class TcgApiService {
       if (exactMatch != null) {
         final detail = await fetchCardDetail(exactMatch.id, lang: langCode);
         final finalCard = detail ?? exactMatch;
-        final others =
-            allMatchedCards.where((c) => c.id != exactMatch!.id).toList();
+        final others = allMatchedCards.where((c) => c.id != exactMatch!.id).toList();
         return [finalCard, ...others];
       }
     }
 
-    if (allMatchedCards.isEmpty && langCode != 'en') {
-      return searchByCollectionNumber(collectionNumber,
-          language: CardLanguage.en);
-    }
-
     return allMatchedCards;
+  }
+
+  /// Consulta fallback a pokemontcg.io (Base de datos oficial completa con Cardmarket prices)
+  Future<List<PokemonCard>> _searchPokemonTcgIo({
+    String? query,
+    String? number,
+  }) async {
+    try {
+      final queryParts = <String>[];
+      if (query != null && query.isNotEmpty) {
+        queryParts.add('name:"*${query.trim()}*"');
+      }
+      if (number != null && number.isNotEmpty) {
+        final rawNum = number.split('/')[0].replaceAll(RegExp(r'[^\d]'), '').trim();
+        if (rawNum.isNotEmpty) {
+          queryParts.add('number:"$rawNum"');
+        }
+      }
+
+      if (queryParts.isEmpty) return [];
+
+      final q = queryParts.join(' ');
+      final url = Uri.parse('$_pokemonTcgIoBase/cards?q=${Uri.encodeComponent(q)}&pageSize=25');
+
+      final res = await http.get(url, headers: _headers).timeout(const Duration(seconds: 5));
+      if (res.statusCode == 200) {
+        final Map<String, dynamic> body = json.decode(res.body);
+        final List<dynamic>? data = body['data'] as List?;
+        if (data != null) {
+          return data
+              .map((item) => PokemonCard.fromPokemonTcgIo(item as Map<String, dynamic>))
+              .toList();
+        }
+      }
+      return [];
+    } catch (_) {
+      return [];
+    }
   }
 
   Future<PokemonCard?> fetchCardDetail(String cardId, {String lang = 'en'}) async {
@@ -376,7 +422,6 @@ class TcgApiService {
         }
       }
 
-      // Si no hubo resultados con el filtro específico de idioma, reintentar con lang:any
       if (langFilter != 'lang:any') {
         final fallbackQuery = isNumeric ? 'number:$clean' : '$clean lang:any';
         final fallbackUrl = Uri.parse(
@@ -440,7 +485,6 @@ class TcgApiService {
         }
       }
 
-      // Si no encuentra con el parámetro de idioma, reintentar sin él (inglés / universal)
       if (langParam.isNotEmpty) {
         final fallbackUrl = isPasscode
             ? Uri.parse('https://db.ygoprodeck.com/api/v7/cardinfo.php?id=$clean')
@@ -478,7 +522,6 @@ class TcgApiService {
     final clean = query.trim();
     if (clean.isEmpty) return [];
 
-    // Si tiene formato de set (ej: ST1-03, BT4-008, EX8-038)
     final isCardCode = RegExp(r'^[A-Za-z0-9]{2,6}[-–]\d{1,4}$').hasMatch(clean);
     final url = isCardCode
         ? Uri.parse(

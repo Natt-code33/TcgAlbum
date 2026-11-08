@@ -18,7 +18,12 @@ import '../services/image_matching_service.dart';
 import 'manual_card_view.dart';
 
 class ScannerView extends StatefulWidget {
-  const ScannerView({super.key});
+  final TcgGame initialGame;
+
+  const ScannerView({
+    super.key,
+    this.initialGame = TcgGame.pokemon,
+  });
 
   @override
   State<ScannerView> createState() => _ScannerViewState();
@@ -41,11 +46,17 @@ class _ScannerViewState extends State<ScannerView> {
   bool _isMatchingImages = false;
   Map<String, int> _visualScores = {};
   String? _errorMessage;
-  TcgGame _selectedGame = TcgGame.all;
+  late TcgGame _selectedGame;
   CardLanguage _selectedLanguage = CardLanguage.auto;
 
   // ── Controladores ─────────────────────────────────────────────────────────
   final TextEditingController _manualSearchController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedGame = widget.initialGame;
+  }
 
   @override
   void dispose() {
@@ -157,10 +168,7 @@ class _ScannerViewState extends State<ScannerView> {
       }
 
       PokemonCard? autoSelected;
-      if (results.length == 1 ||
-          (targetNumber != null &&
-              targetNumber.contains('/') &&
-              results.first.game == TcgGame.pokemon)) {
+      if (results.length == 1) {
         autoSelected = results.first;
         if (autoSelected.game == TcgGame.pokemon &&
             autoSelected.cardmarketPrices == null) {
@@ -465,6 +473,9 @@ class _ScannerViewState extends State<ScannerView> {
             // ── Lista de resultados para elegir con imagen ────────────────
             if (_searchResults.isNotEmpty && !_isProcessing)
               _buildResultsList(),
+
+            // Espacio final generoso para que nada quede cortado al hacer scroll
+            const SizedBox(height: 60),
           ],
         ),
       ),
