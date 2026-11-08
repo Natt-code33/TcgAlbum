@@ -14,6 +14,7 @@ import 'dart:developer' as developer;
 import 'package:http/http.dart' as http;
 import '../models/pokemon_card.dart';
 import 'ocr_service.dart';
+import 'local_catalog_service.dart';
 
 class TcgApiException implements Exception {
   final String message;
@@ -44,6 +45,39 @@ class TcgApiService {
     CardLanguage language = CardLanguage.auto,
   }) async {
     final cleanQuery = _extractCoreName(query);
+
+    // ── 0. BÚSQUEDA INSTANTÁNEA EN CATÁLOGO LOCAL SQLITE (OFFLINE 1 ms) ──
+    if (game == TcgGame.pokemon || game == TcgGame.all) {
+      if (number != null && number.isNotEmpty) {
+        final parts = number.split('/');
+        final rawNumber = parts[0].replaceAll(RegExp(r'[^\d]'), '').trim();
+        final totalInSet = parts.length > 1
+            ? int.tryParse(parts[1].replaceAll(RegExp(r'[^\d]'), '').trim())
+            : null;
+
+        final setMatch = RegExp(r'(?:^|\b)([A-Za-z0-9]{2,6})\s*[-–_\s]\s*(\d{1,4})(?:/\d{1,4})?')
+            .firstMatch(number.trim());
+        final setCode = setMatch?.group(1);
+        final cardNum = setMatch?.group(2) ?? rawNumber;
+
+        final localCard = await LocalCatalogService.instance.findCard(
+          cardName: cleanQuery.isNotEmpty ? cleanQuery : null,
+          setCode: setCode,
+          cardNumber: cardNum,
+          totalInSet: totalInSet,
+          language: language,
+        );
+
+        if (localCard != null) {
+          developer.log('⚡ Carta encontrada al instante en SQLite local: ${localCard.name} (${localCard.id})', name: 'TcgApiService');
+          // Enriquecer en segundo plano con Cardmarket prices si tenemos conexión
+          fetchCardDetail(localCard.id, lang: localCard.language ?? 'en').then((detail) {
+            // Precio obtenido en segundo plano
+          }).catchError((_) => null);
+          return [localCard];
+        }
+      }
+    }
 
     switch (game) {
       case TcgGame.pokemon:
@@ -111,6 +145,12 @@ class TcgApiService {
           ioResults = await _searchPokemonTcgIo(number: number);
         }
         if (ioResults.isNotEmpty) return ioResults;
+      }
+
+      // Si las APIs remotas están caídas o no encontraron resultados, buscar en catálogo local por nombre
+      if (results.isEmpty && query.isNotEmpty) {
+        final localByName = await LocalCatalogService.instance.searchByName(query, language: language);
+        if (localByName.isNotEmpty) return localByName;
       }
 
       return results;
@@ -182,52 +222,27 @@ class TcgApiService {
     String collectionNumber, {
     CardLanguage language = CardLanguage.auto,
   }) async {
-    final nameResults = await searchByName(pokemonName, language: language);
-    final parts = collectionNumber.split('/');
-    final rawNumber = parts[0].replaceAll(RegExp(r'[^\d]'), '').trim();
-    final intNumber = int.tryParse(rawNumber);
-    final totalInSet = parts.length > 1 ? int.tryParse(parts[1].trim()) : null;
-
-    final exactMatches = <PokemonCard>[];
-    final otherResults = <PokemonCard>[];
-
-    for (final card in nameResults) {
-      final cardRaw = card.number.replaceAll(RegExp(r'[^\d]'), '').trim();
-      final cardInt = int.tryParse(cardRaw);
-
-      if (card.number == collectionNumber ||
-          card.number == rawNumber ||
-          (intNumber != null && cardInt == intNumber)) {
-        if (totalInSet != null && card.setPrintedTotal == totalInSet) {
-          exactMatches.insert(0, card);
-        } else {
-          exactMatches.add(card);
+    // 1. Buscar PRIMERO por número / código de set:
+    // El código de set + número (ej: "s8a 012/028", "s8a-012", "012/028")
+    // identifica la carta de forma unívoca y exacta.
+    final numberResults = await searchByCollectionNumber(collectionNumber, language: language);
+    if (numberResults.isNotEmpty) {
+      // Si el nombre buscado coincide con alguna de las cartas del set, priorizarla
+      final coreQuery = _extractCoreName(pokemonName).toLowerCase();
+      if (coreQuery.isNotEmpty) {
+        final matches = numberResults.where((c) =>
+            c.name.toLowerCase().contains(coreQuery) ||
+            coreQuery.contains(c.name.toLowerCase())).toList();
+        if (matches.isNotEmpty) {
+          final rest = numberResults.where((c) => !matches.contains(c)).toList();
+          return [...matches, ...rest];
         }
-      } else {
-        otherResults.add(card);
       }
+      return numberResults;
     }
 
-    if (exactMatches.isNotEmpty) {
-      final detail = await fetchCardDetail(
-        exactMatches.first.id,
-        lang: exactMatches.first.language ?? 'en',
-      );
-      final finalFirst = detail ?? exactMatches.first;
-      final remainingExact = exactMatches.skip(1).toList();
-      return [finalFirst, ...remainingExact, ...otherResults];
-    }
-
-    // Si no hubo coincidencia exacta entre el nombre y el número:
-    // El número de colección es un identificador mucho más preciso que el texto del nombre
-    // (el cual a menudo el OCR confunde con un ataque o descripción).
-    if (rawNumber.isNotEmpty) {
-      final numberResults = await searchByCollectionNumber(collectionNumber, language: language);
-      if (numberResults.isNotEmpty) {
-        return numberResults;
-      }
-    }
-
+    // 2. Si no se encontró por set/número directo, buscar por nombre
+    final nameResults = await searchByName(pokemonName, language: language);
     return nameResults;
   }
 
@@ -235,16 +250,46 @@ class TcgApiService {
     String collectionNumber, {
     CardLanguage language = CardLanguage.auto,
   }) async {
+    final langCode = language.apiCode == 'auto' ? 'en' : language.apiCode;
+
+    // 0. Comprobar si el identificador incluye el código de set explícito
+    // Ejemplos: "s8a 012/028", "s8a-012", "SV4a 025/190", "MEW 025/165", "s8a 012"
+    final setWithNumberMatch = RegExp(r'(?:^|\b)([A-Za-z0-9]{2,6})\s*[-–_\s]\s*(\d{1,4})(?:/\d{1,4})?')
+        .firstMatch(collectionNumber.trim());
+
+    if (setWithNumberMatch != null) {
+      final setId = setWithNumberMatch.group(1)!.toLowerCase();
+      final rawNum = setWithNumberMatch.group(2)!;
+      final intNum = int.tryParse(rawNum);
+
+      final candidateNums = <String>{rawNum};
+      if (intNum != null) {
+        candidateNums.add(intNum.toString());
+        candidateNums.add(intNum.toString().padLeft(3, '0'));
+      }
+
+      // Intentar primero en el idioma detectado/solicitado, luego en japonés, inglés y español
+      final langsToTry = {langCode, 'ja', 'en', 'es'};
+      for (final l in langsToTry) {
+        for (final numCandidate in candidateNums) {
+          final directCard = await _fetchCardBySetAndNumber(setId, numCandidate, lang: l);
+          if (directCard != null) {
+            final detail = await fetchCardDetail(directCard.id, lang: l);
+            return [detail ?? directCard];
+          }
+        }
+      }
+    }
+
+    // 1. Extraer el número sin prefijos y el total del set (ej: "012/028" -> rawNumber="012", totalInSet=28)
     final parts = collectionNumber.split('/');
-    final rawNumber = parts[0].trim();
-    final intNumber = int.tryParse(rawNumber.replaceAll(RegExp(r'[^\d]'), ''));
+    final rawNumber = parts[0].replaceAll(RegExp(r'[^\d]'), '').trim();
+    final intNumber = int.tryParse(rawNumber);
     final totalInSet = parts.length > 1
         ? int.tryParse(parts[1].replaceAll(RegExp(r'[^\d]'), '').trim())
         : null;
 
     if (rawNumber.isEmpty) return [];
-
-    final langCode = language.apiCode == 'auto' ? 'en' : language.apiCode;
 
     final candidateNumbers = <String>{rawNumber};
     if (intNumber != null) {
@@ -252,10 +297,26 @@ class TcgApiService {
       candidateNumbers.add(intNumber.toString().padLeft(3, '0'));
     }
 
+    // 2. Si tenemos el total del set (ej: /028), buscar directamente el set oficial que tiene esa cantidad de cartas!
+    if (totalInSet != null) {
+      final setLangs = {langCode, 'ja', 'en', 'es'};
+      for (final l in setLangs) {
+        final setIds = await _findSetsByOfficialCount(totalInSet, lang: l);
+        for (final sId in setIds) {
+          for (final numCand in candidateNumbers) {
+            final directCard = await _fetchCardBySetAndNumber(sId, numCand, lang: l);
+            if (directCard != null) {
+              final detail = await fetchCardDetail(directCard.id, lang: l);
+              return [detail ?? directCard];
+            }
+          }
+        }
+      }
+    }
+
+    // 3. Búsqueda amplia por localId en TCGdex
     final allMatchedCards = <PokemonCard>[];
     final seenIds = <String>{};
-
-    // Buscar en el idioma seleccionado y también en inglés
     final langsToSearch = {langCode, 'en', 'es'};
 
     for (final l in langsToSearch) {
@@ -278,36 +339,7 @@ class TcgApiService {
           }
         } catch (_) {}
       }
-      if (allMatchedCards.isNotEmpty && totalInSet == null) break;
-    }
-
-    if (totalInSet != null) {
-      final setIds = await _findSetsByOfficialCount(totalInSet, lang: langCode);
-      PokemonCard? exactMatch;
-      for (final card in allMatchedCards) {
-        if (setIds.any((sId) => card.id.startsWith('$sId-'))) {
-          exactMatch = card;
-          break;
-        }
-      }
-
-      if (exactMatch == null && setIds.isNotEmpty) {
-        for (final sId in setIds) {
-          final directCard =
-              await _fetchCardBySetAndNumber(sId, rawNumber, lang: langCode);
-          if (directCard != null) {
-            exactMatch = directCard;
-            break;
-          }
-        }
-      }
-
-      if (exactMatch != null) {
-        final detail = await fetchCardDetail(exactMatch.id, lang: langCode);
-        final finalCard = detail ?? exactMatch;
-        final others = allMatchedCards.where((c) => c.id != exactMatch!.id).toList();
-        return [finalCard, ...others];
-      }
+      if (allMatchedCards.isNotEmpty) break;
     }
 
     return allMatchedCards;
@@ -847,6 +879,19 @@ class TcgApiService {
     'コイキング': 'Magikarp',
     'ギャラドス': 'Gyarados',
     'ラプラス': 'Lapras',
+    'ゼルネアス': 'Xerneas',
+    'イベルタル': 'Yveltal',
+    'ジガルデ': 'Zygarde',
+    'レシラム': 'Reshiram',
+    'ゼクロム': 'Zekrom',
+    'キュレム': 'Kyurem',
+    'ザシアン': 'Zacian',
+    'ザマゼンタ': 'Zamazenta',
+    'コライドン': 'Koraidon',
+    'ミライドン': 'Miraidon',
+    'トドロクツキ': 'Roaring Moon',
+    'テツノブジン': 'Iron Valiant',
+    'フーディン': 'Alakazam',
 
     // ── CHINESE (中文 - 简体/繁体) ──────────────────────────────────────────────
     '皮卡丘': 'Pikachu',

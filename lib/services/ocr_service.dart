@@ -4,8 +4,9 @@
 // usando Google ML Kit Text Recognition para cartas TCG:
 // Pokémon, Magic (MTG), Yu-Gi-Oh!, Digimon, One Piece, Lorcana, etc.
 // Incorpora ordenación espacial (zonas superior e inferior de la carta),
-// normalización tolerante a fallos de OCR en números de colección y
-// filtrado inteligente de encabezados de cartas.
+// normalización tolerante a fallos de OCR en números de colección,
+// filtrado estricto de indicadores de vida (HP/PS) y atributos,
+// y reconocimiento robusto multi-script para cartas asiáticas (JA, KO, ZH).
 // ============================================================
 
 import 'dart:io';
@@ -99,7 +100,7 @@ class OcrService {
   }) async {
     final inputImage = InputImage.fromFile(imageFile);
 
-    // 1. Si el usuario seleccionó un idioma asiático específico, usar ese script
+    // 1. Si el usuario seleccionó un idioma asiático específico, usar ese script directamente
     if (language == CardLanguage.ja) {
       return _runRecognition(inputImage, TextRecognitionScript.japanese, CardLanguage.ja);
     } else if (language == CardLanguage.ko) {
@@ -112,15 +113,31 @@ class OcrService {
     final latinResult = await _runRecognition(
       inputImage,
       TextRecognitionScript.latin,
-      CardLanguage.en,
+      language,
     );
 
-    // Si encontró tanto el nombre como el número, es un resultado completo
-    if (latinResult.pokemonName != null && latinResult.collectionNumber != null) {
+    // Validar si el título latino extraído es un nombre real (no un número de HP ni ruido)
+    final latinName = latinResult.pokemonName?.trim();
+    final bool hasValidLatinName = latinName != null &&
+        latinName.length >= 2 &&
+        !RegExp(r'^\d+$').hasMatch(latinName) &&
+        !RegExp(r'\b(HP|PS|ATK|DEF)\b', caseSensitive: false).hasMatch(latinName) &&
+        RegExp(r'[\p{L}]', unicode: true).allMatches(latinName).length >= 2;
+
+    // Si el usuario eligió un idioma latino explícito (es, en), respetar su elección
+    if (language != CardLanguage.auto) {
       return latinResult;
     }
 
-    // 3. Si en Auto falta el nombre o es carta asiática, probar scripts asiáticos
+    // En modo Auto:
+    // Si tenemos nombre latino válido Y número, y NO hay caracteres asiáticos obvios en el texto general:
+    final hasAsianChars = RegExp(r'[\u3040-\u30FF\uAC00-\uD7AF\u4E00-\u9FFF]').hasMatch(latinResult.rawText);
+    if (hasValidLatinName && latinResult.collectionNumber != null && !hasAsianChars) {
+      return latinResult;
+    }
+
+    // 3. En modo Auto, si no hay nombre latino válido o la carta contiene texto asiático:
+    // Probar scripts asiáticos (japonés, coreano, chino)
     final asianScripts = [
       (TextRecognitionScript.japanese, CardLanguage.ja),
       (TextRecognitionScript.korean, CardLanguage.ko),
@@ -129,17 +146,31 @@ class OcrService {
 
     for (final (script, lang) in asianScripts) {
       final asianResult = await _runRecognition(inputImage, script, lang);
-      if (asianResult.pokemonName != null && asianResult.pokemonName!.isNotEmpty) {
+      final asianName = asianResult.pokemonName?.trim();
+      final hasValidAsianName = asianName != null &&
+          asianName.length >= 2 &&
+          !RegExp(r'^\d+$').hasMatch(asianName) &&
+          !RegExp(r'\b(HP|PS)\b', caseSensitive: false).hasMatch(asianName);
+
+      if (hasValidAsianName) {
         return OcrResult(
           collectionNumber: latinResult.collectionNumber ?? asianResult.collectionNumber,
           pokemonName: asianResult.pokemonName,
-          detectedLanguage: lang,
+          detectedLanguage: asianResult.detectedLanguage != CardLanguage.auto
+              ? asianResult.detectedLanguage
+              : lang,
           rawText: '${latinResult.rawText}\n${asianResult.rawText}',
         );
       }
     }
 
-    return latinResult;
+    // Si ningún script asiático encontró nombre, devolver el mejor resultado posible
+    return OcrResult(
+      collectionNumber: latinResult.collectionNumber,
+      pokemonName: hasValidLatinName ? latinResult.pokemonName : null,
+      detectedLanguage: latinResult.detectedLanguage,
+      rawText: latinResult.rawText,
+    );
   }
 
   /// Ejecuta un reconocedor específico para un script dado aplicando lógica espacial.
@@ -157,6 +188,8 @@ class OcrService {
 
       // ── 1. Recopilar todas las líneas con sus coordenadas espaciales ──
       final allLines = <TextLine>[];
+      double minX = double.infinity;
+      double maxX = 0;
       double minY = double.infinity;
       double maxY = 0;
 
@@ -164,6 +197,8 @@ class OcrService {
         for (final line in block.lines) {
           allLines.add(line);
           final box = line.boundingBox;
+          if (box.left < minX) minX = box.left;
+          if (box.right > maxX) maxX = box.right;
           if (box.top < minY) minY = box.top;
           if (box.bottom > maxY) maxY = box.bottom;
         }
@@ -173,6 +208,7 @@ class OcrService {
       allLines.sort((a, b) => a.boundingBox.top.compareTo(b.boundingBox.top));
 
       final totalHeight = (maxY - minY).abs();
+      final totalWidth = (maxX - minX).abs();
       final hasValidCoordinates = totalHeight > 80 && allLines.length >= 2;
 
       // ── 2. Extracción de Número de Colección / Código de Set ──────────
@@ -187,6 +223,26 @@ class OcrService {
           if (found != null) {
             collectionNumber = found;
             break;
+          }
+        }
+
+        // Si se detectó sólo la fracción (ej: "012/028") sin código de set,
+        // buscar en las líneas inferiores si alguna contiene el código de colección (ej: "s8a", "SV4a", "MEW", "S12a")
+        if (collectionNumber != null && !collectionNumber.contains(' ') && !collectionNumber.contains('-')) {
+          for (final line in bottomLines) {
+            final clean = line.text.replaceAll(RegExp(r'[\[\]]'), ' ').trim();
+            final match = RegExp(
+              r'\b(s\d+[a-z]?|sv\d+[a-z]?|sm\d+[a-z]?|xy\d+|bw\d+|dp\d+|cp\d+|[A-Za-z]{2,4}\d{0,2})\b',
+              caseSensitive: false,
+            ).firstMatch(clean);
+            if (match != null) {
+              final candSet = match.group(1)!;
+              final upper = candSet.toUpperCase();
+              if (!['NO', 'NUM', 'REF', 'CARD', 'ITEM', 'PAGE', 'HP', 'PS', 'PROMO', 'BASIC'].contains(upper)) {
+                collectionNumber = '$candSet $collectionNumber';
+                break;
+              }
+            }
           }
         }
       }
@@ -207,6 +263,7 @@ class OcrService {
 
       // ── 3. Extracción de Nombre de la Carta ────────────────────────────
       // En cartas TCG, el nombre SIEMPRE está en el encabezado (primer 30% superior)
+      // y en el lateral izquierdo/central (NUNCA en la esquina superior derecha donde se ubica el HP/Coste)
       String? cardTitle;
 
       List<TextLine> topLines;
@@ -218,20 +275,28 @@ class OcrService {
       }
 
       for (final line in topLines) {
-        final candidate = _cleanAndValidateTitle(line.text, collectionNumber);
+        final leftRatio = (hasValidCoordinates && totalWidth > 50)
+            ? (line.boundingBox.left - minX) / totalWidth
+            : null;
+        final candidate = _cleanAndValidateTitle(line.text, collectionNumber, lineLeftRatio: leftRatio);
         if (candidate != null) {
           cardTitle = candidate;
           break;
         }
       }
 
-      // Si no se encontró en el encabezado estricto, buscar en las líneas superiores
+      // Si no se encontró en el encabezado estricto, buscar en las líneas superiores (hasta 55%)
       if (cardTitle == null) {
         for (final line in allLines) {
-          if (hasValidCoordinates && line.boundingBox.top > (minY + totalHeight * 0.70)) {
-            continue; // Evitar el pie de carta (ilustradores, números, legal)
+          if (hasValidCoordinates) {
+            if (line.boundingBox.top > (minY + totalHeight * 0.55)) {
+              continue; // Evitar el pie de carta (ilustradores, números, legal)
+            }
           }
-          final candidate = _cleanAndValidateTitle(line.text, collectionNumber);
+          final leftRatio = (hasValidCoordinates && totalWidth > 50)
+              ? (line.boundingBox.left - minX) / totalWidth
+              : null;
+          final candidate = _cleanAndValidateTitle(line.text, collectionNumber, lineLeftRatio: leftRatio);
           if (candidate != null) {
             cardTitle = candidate;
             break;
@@ -241,13 +306,39 @@ class OcrService {
 
       // ── 4. Detección de idioma según caracteres del título o texto ────
       CardLanguage lang = targetLanguage;
-      if (cardTitle != null) {
-        if (RegExp(r'[\uAC00-\uD7AF]').hasMatch(cardTitle)) {
-          lang = CardLanguage.ko;
-        } else if (RegExp(r'[\u3040-\u30FF]').hasMatch(cardTitle)) {
-          lang = CardLanguage.ja;
-        } else if (RegExp(r'[\u4E00-\u9FFF]').hasMatch(cardTitle)) {
-          lang = CardLanguage.zh;
+      final isJaContext = RegExp(r'(?:s\d+[a-z]?|sv\d+[a-z]?|[\u3040-\u30FF])', caseSensitive: false).hasMatch(rawText) ||
+          (collectionNumber != null && collectionNumber.toLowerCase().contains('s8a'));
+
+      final titleOrRaw = cardTitle ?? rawText;
+      if (RegExp(r'[\u3040-\u30FF]').hasMatch(titleOrRaw)) {
+        lang = CardLanguage.ja;
+      } else if (RegExp(r'[\uAC00-\uD7AF]').hasMatch(titleOrRaw)) {
+        lang = CardLanguage.ko;
+      } else if (RegExp(r'[\u4E00-\u9FFF]').hasMatch(titleOrRaw)) {
+        // Caracteres CJK (Kanji): Si el contexto contiene Kana o código de set japonés (s8a, sv...), es 100% Japonés
+        lang = isJaContext ? CardLanguage.ja : CardLanguage.zh;
+      } else if (targetLanguage == CardLanguage.auto) {
+        // ── Detección entre Español e Inglés para texto latino en modo Auto ──
+        final hasSpanishPs = RegExp(r'\bPS\s*\d+\b').hasMatch(rawText); // En español siempre es "PS", en inglés "HP"
+        final hasSpanishWords = RegExp(
+          r'\b(básico|fase\s*[12]|daño|energía|descarta|descarte|baraja|roba|rival|combate|banca|puedes|ataque|debilidad|resistencia|retirada|partidario|objeto|estadio|habilidad)\b',
+          caseSensitive: false,
+        ).hasMatch(rawText);
+        final hasSpanishAccents = RegExp(r'[áéíóúñ¿¡]').hasMatch(rawText);
+
+        final hasEnglishHp = RegExp(r'\bHP\s*\d+\b').hasMatch(rawText);
+        final hasEnglishWords = RegExp(
+          r'\b(basic|stage\s*[12]|damage|discard|deck|opponent|bench|weakness|resistance|retreat|supporter|stadium|ability)\b',
+          caseSensitive: false,
+        ).hasMatch(rawText);
+
+        if (hasSpanishPs || hasSpanishWords || hasSpanishAccents) {
+          lang = CardLanguage.es;
+        } else if (hasEnglishHp || hasEnglishWords) {
+          lang = CardLanguage.en;
+        } else {
+          // Por defecto en la app en español, clasificar como español
+          lang = CardLanguage.es;
         }
       }
 
@@ -272,13 +363,32 @@ class OcrService {
     var normalized = text.replaceAll(RegExp(r'[|\\／]'), '/');
     normalized = normalized.replaceAll(RegExp(r'\s*/\s*'), '/');
 
-    // 1. Fracción estándar de colección (ej: "025/165", "140/195", "070/280")
+    // Reparar posibles barras accidentales introducidas por el OCR dentro de números (ej: "0/12/028" -> "012/028")
+    normalized = normalized.replaceAllMapped(
+      RegExp(r'\b(\d)/(\d{2,3}/\d{2,4})\b'),
+      (m) => '${m.group(1)}${m.group(2)}',
+    );
+
+    // 1. Formato Set + Fracción (ej: "s8a 012/028", "[s8a] 012/028", "s8a-012/028", "SV4a 025/190", "MEW 025/165")
+    final matchSetAndFrac = RegExp(
+      r'(?:\[|\b)([A-Za-z0-9]{2,6})(?:\]|\b)?\s*[-–_]?\s*(\d{1,4}/\d{1,4})\b',
+    ).firstMatch(normalized);
+    if (matchSetAndFrac != null) {
+      final setCode = matchSetAndFrac.group(1)!;
+      final frac = matchSetAndFrac.group(2)!;
+      final upperSet = setCode.toUpperCase();
+      if (!['NO', 'NUM', 'REF', 'CARD', 'ITEM', 'PAGE', 'BASIC', 'STAGE', 'POKEMON', 'HP', 'PS'].contains(upperSet)) {
+        return '$setCode $frac';
+      }
+    }
+
+    // 2. Fracción estándar de colección (ej: "025/165", "140/195", "070/280", "012/028")
     final matchStandard = RegExp(r'\b(\d{1,4}/\d{1,4})\b').firstMatch(normalized);
     if (matchStandard != null) {
       return matchStandard.group(1);
     }
 
-    // 2. Fracción con caracteres alfanuméricos confundidos por OCR:
+    // 3. Fracción con caracteres alfanuméricos confundidos por OCR:
     // 'O'/'o' por 0, 'I'/'l' por 1, 'S'/'s' por 5 (ej: "O25/165", "025/l65", "140/19S")
     final matchConfused = RegExp(r'\b([0-9OIlS]{1,4}/[0-9OIlS]{1,4})\b').firstMatch(normalized);
     if (matchConfused != null) {
@@ -292,18 +402,11 @@ class OcrService {
       }
     }
 
-    // 3. Código de Set con prefijo y número (ej: "SV5K-005", "LOB-005", "ST1-03", "OP01-025", "BT1-025")
+    // 4. Código de Set con prefijo y número (ej: "s8a-012", "SV5K-005", "LOB-005", "ST1-03", "OP01-025", "BT1-025")
     final matchSetCode = RegExp(r'\b([A-Za-z0-9]{2,6}[A-Za-z0-9\.\-]*\s*[-–_]\s*\d{1,4})\b')
         .firstMatch(normalized);
     if (matchSetCode != null) {
       return matchSetCode.group(1)!.replaceAll(' ', '');
-    }
-
-    // 4. Formato Set + Número de expansión asiático (ej: "SV2a 025/165", "SV4K 051/066")
-    final matchAsianSet = RegExp(r'\b([A-Za-z0-9]{2,6}\s+\d{1,4}/\d{1,4})\b').firstMatch(normalized);
-    if (matchAsianSet != null) {
-      final frac = RegExp(r'\b\d{1,4}/\d{1,4}\b').firstMatch(matchAsianSet.group(1)!);
-      if (frac != null) return frac.group(0);
     }
 
     // 5. Código Passcode Yu-Gi-Oh! (8 dígitos exactos)
@@ -323,16 +426,40 @@ class OcrService {
   }
 
   /// Limpia y valida si una línea de texto corresponde al título de una carta.
-  String? _cleanAndValidateTitle(String line, String? collectionNumber) {
+  String? _cleanAndValidateTitle(
+    String line,
+    String? collectionNumber, {
+    double? lineLeftRatio,
+  }) {
+    // Si la línea está en el cuadrante derecho superior (> 58% del ancho),
+    // es la zona reservada para HP, tipo elemental, mana o atributo. Nunca es el título.
+    if (lineLeftRatio != null && lineLeftRatio > 0.58) {
+      return null;
+    }
+
     var trimmed = line.trim();
     if (trimmed.length < 2) return null;
     if (collectionNumber != null && trimmed.contains(collectionNumber)) return null;
-    if (RegExp(r'^\d+$').hasMatch(trimmed)) return null;
 
-    // Quitar indicadores de PS / HP / ATK / DEF / DP (ej: "HP 70", "70 HP", "PS 120", "ATK/2500")
+    // Descartar si es estrictamente numérico o sólo contiene dígitos y símbolos de puntuación
+    if (RegExp(r'^\d+$').hasMatch(trimmed)) return null;
+    if (RegExp(r'^[\d\s\.\,\:\;\-\/]+$').hasMatch(trimmed)) return null;
+
+    // Descartar si contiene indicadores de vida (HP / PS) solos o combinados con números
+    // Ejemplos: "HP 120", "120 HP", "HP120", "120HP", "PS 120", "HP: 70", "120 PS", "HP"
+    if (RegExp(r'\b(HP|PS)\b', caseSensitive: false).hasMatch(trimmed) &&
+        RegExp(r'\d+').hasMatch(trimmed)) {
+      return null;
+    }
+    if (RegExp(r'(?:HP|PS)\s*[:/]?\s*\d+|\d+\s*[:/]?\s*(?:HP|PS)', caseSensitive: false).hasMatch(trimmed)) {
+      return null;
+    }
+
+    // Quitar indicadores de PS / HP / ATK / DEF / DP y números pegados
     trimmed = trimmed
-        .replaceAll(RegExp(r'\b(HP|PS|ATK|DEF|DP)\s*[:/]?\s*\d+\b', caseSensitive: false), '')
-        .replaceAll(RegExp(r'\b\d+\s*(HP|PS|ATK|DEF|DP)\b', caseSensitive: false), '')
+        .replaceAll(RegExp(r'(?:HP|PS|ATK|DEF|DP)\s*[:/]?\s*\d+', caseSensitive: false), '')
+        .replaceAll(RegExp(r'\d+\s*(?:HP|PS|ATK|DEF|DP)', caseSensitive: false), '')
+        .replaceAll(RegExp(r'\b(HP|PS|ATK|DEF|DP)\b', caseSensitive: false), '')
         .replaceAll(RegExp(r'\[(Monster|Spell|Trap|Creature|Monstruo|Magia|Trampa)\]', caseSensitive: false), '')
         .trim();
 
@@ -348,7 +475,7 @@ class OcrService {
       '',
     ).trim();
 
-    // Quitar caracteres no alfabéticos de los extremos
+    // Quitar caracteres no alfanuméricos de los extremos
     trimmed = trimmed.replaceAll(
       RegExp(r'^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$', unicode: true),
       '',
@@ -362,6 +489,9 @@ class OcrService {
 
     if (trimmed.length < 2) return null;
 
+    // Si después de limpiar sólo quedó un número (ej: "120"), descartar
+    if (RegExp(r'^\d+$').hasMatch(trimmed)) return null;
+
     final upper = trimmed.toUpperCase();
     if (_ignoredWords.any((w) => upper == w || upper.startsWith('$w '))) {
       return null;
@@ -372,8 +502,9 @@ class OcrService {
       return null;
     }
 
-    // Debe contener caracteres alfabéticos válidos
-    if (RegExp(r'[\p{L}]', unicode: true).hasMatch(trimmed)) {
+    // Debe contener al menos 2 caracteres alfabéticos válidos (latinos o asiáticos)
+    final letterCount = RegExp(r'[\p{L}]', unicode: true).allMatches(trimmed).length;
+    if (letterCount >= 2) {
       return _cleanName(trimmed);
     }
 

@@ -2,7 +2,7 @@ name: dashboard_personal
 description: "Álbum de cartas Pokémon TCG con OCR, API y gestión de precios."
 publish_to: 'none'
 
-version: 1.0.4+4
+version: 1.0.9+9
 
 environment:
   sdk: ^3.5.0
@@ -25,6 +25,11 @@ dependencies:
   # ── Almacenamiento local persistente (álbum no se borra al cerrar) ─────────
   shared_preferences: ^2.3.2
 
+  # ── Base de datos local SQLite para catálogo y búsqueda instantánea ────────
+  sqflite: ^2.4.1
+  path: ^1.9.0
+  path_provider: ^2.1.5
+
   # ── Caché de imágenes de red ──────────────────────────────────────────────
   cached_network_image: ^3.4.1
   image: ^4.12.0
@@ -36,3 +41,5 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/database/tcg_catalog.db

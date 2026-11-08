@@ -49,9 +49,7 @@ android {
 
     buildTypes {
         release {
-            // Mantiene la misma firma original del proyecto (debug.keystore) para permitir
-            // actualizar la app en los dispositivos instalados SIN perder las cartas guardadas.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = false
             isShrinkResources = false
         }

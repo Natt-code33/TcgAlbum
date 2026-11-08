@@ -104,7 +104,15 @@ class _ScannerViewState extends State<ScannerView> {
         language: _selectedLanguage,
       );
 
-      setState(() => _ocrResult = result);
+      setState(() {
+        _ocrResult = result;
+        // Si el usuario tenía seleccionado Auto y el OCR detectó un idioma específico (ej: japonés),
+        // actualizar _selectedLanguage para que la UI y las búsquedas reflejen el idioma detectado
+        if (_selectedLanguage == CardLanguage.auto &&
+            result.detectedLanguage != CardLanguage.auto) {
+          _selectedLanguage = result.detectedLanguage;
+        }
+      });
 
       if (result.pokemonName != null || result.collectionNumber != null) {
         // Auto-rellenar el campo de búsqueda para que el usuario siempre vea lo que detectó el OCR
@@ -159,11 +167,17 @@ class _ScannerViewState extends State<ScannerView> {
         targetNumber = collectionNumber;
       }
 
+      final effectiveLang = (_selectedLanguage == CardLanguage.auto &&
+              _ocrResult?.detectedLanguage != null &&
+              _ocrResult!.detectedLanguage != CardLanguage.auto)
+          ? _ocrResult!.detectedLanguage
+          : _selectedLanguage;
+
       final results = await _apiService.searchUniversal(
         query: queryName,
         number: targetNumber,
         game: _selectedGame,
-        language: _selectedLanguage,
+        language: effectiveLang,
       );
 
       if (results.isEmpty) {
