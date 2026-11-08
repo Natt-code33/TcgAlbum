@@ -49,8 +49,9 @@ android {
 
     buildTypes {
         release {
-            val releaseSigning = signingConfigs.getByName("release")
-            signingConfig = if (releaseSigning.storeFile?.exists() == true) releaseSigning else signingConfigs.getByName("debug")
+            // Mantiene la misma firma original del proyecto (debug.keystore) para permitir
+            // actualizar la app en los dispositivos instalados SIN perder las cartas guardadas.
+            signingConfig = signingConfigs.getByName("debug")
             isMinifyEnabled = false
             isShrinkResources = false
         }
