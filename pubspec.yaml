@@ -2,7 +2,7 @@ name: dashboard_personal
 description: "Álbum de cartas Pokémon TCG con OCR, API y gestión de precios."
 publish_to: 'none'
 
-version: 1.0.0+1
+version: 1.0.2+2
 
 environment:
   sdk: ^3.5.0
