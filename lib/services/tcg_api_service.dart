@@ -92,17 +92,24 @@ class TcgApiService {
 
       if (query.isNotEmpty && number != null) {
         results = await searchByNameAndNumber(query, number, language: language);
+        if (results.isEmpty) {
+          results = await searchByCollectionNumber(number, language: language);
+        }
+      } else if (number != null && number.isNotEmpty) {
+        results = await searchByCollectionNumber(number, language: language);
       } else if (query.isNotEmpty) {
         results = await searchByName(query, language: language);
-      } else if (number != null) {
-        results = await searchByCollectionNumber(number, language: language);
       }
 
       // Si TCGdex no arrojó resultados o arrojó muy pocos, consultar pokemontcg.io (Base completa)
       if (results.isEmpty) {
         final translatedQuery = _translateAsianPokemonName(query);
         final ioQuery = translatedQuery.isNotEmpty ? translatedQuery : query;
-        final ioResults = await _searchPokemonTcgIo(query: ioQuery, number: number);
+        var ioResults = await _searchPokemonTcgIo(query: ioQuery, number: number);
+        // Si falló con nombre + número (porque el nombre estaba mal leído), probar solo por número
+        if (ioResults.isEmpty && number != null && number.isNotEmpty) {
+          ioResults = await _searchPokemonTcgIo(number: number);
+        }
         if (ioResults.isNotEmpty) return ioResults;
       }
 
@@ -211,8 +218,14 @@ class TcgApiService {
       return [finalFirst, ...remainingExact, ...otherResults];
     }
 
-    if (nameResults.isEmpty && rawNumber.isNotEmpty) {
-      return searchByCollectionNumber(collectionNumber, language: language);
+    // Si no hubo coincidencia exacta entre el nombre y el número:
+    // El número de colección es un identificador mucho más preciso que el texto del nombre
+    // (el cual a menudo el OCR confunde con un ataque o descripción).
+    if (rawNumber.isNotEmpty) {
+      final numberResults = await searchByCollectionNumber(collectionNumber, language: language);
+      if (numberResults.isNotEmpty) {
+        return numberResults;
+      }
     }
 
     return nameResults;

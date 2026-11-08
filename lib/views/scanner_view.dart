@@ -65,13 +65,13 @@ class _ScannerViewState extends State<ScannerView> {
   }
 
   // ──────────────────────────────────────────────────────────────────────────
-  // PASO 1: Capturar imagen con la cámara.
+  // PASO 1: Capturar imagen con la cámara o galería.
   // ──────────────────────────────────────────────────────────────────────────
-  Future<void> _captureImage() async {
+  Future<void> _captureImage([ImageSource source = ImageSource.camera]) async {
     try {
       final XFile? photo = await _picker.pickImage(
-        source: ImageSource.camera,
-        imageQuality: 90,
+        source: source,
+        imageQuality: 95,
         preferredCameraDevice: CameraDevice.rear,
       );
 
@@ -90,12 +90,12 @@ class _ScannerViewState extends State<ScannerView> {
 
       await _runOcr(imageFile);
     } catch (e) {
-      _showError('Error al abrir la cámara: $e');
+      _showError('Error al capturar la imagen: $e');
     }
   }
 
   // ──────────────────────────────────────────────────────────────────────────
-  // PASO 2: Reconocimiento OCR local multiidioma.
+  // PASO 2: Reconocimiento OCR local multiidioma con ordenación espacial.
   // ──────────────────────────────────────────────────────────────────────────
   Future<void> _runOcr(File imageFile) async {
     try {
@@ -107,6 +107,15 @@ class _ScannerViewState extends State<ScannerView> {
       setState(() => _ocrResult = result);
 
       if (result.pokemonName != null || result.collectionNumber != null) {
+        // Auto-rellenar el campo de búsqueda para que el usuario siempre vea lo que detectó el OCR
+        if (result.collectionNumber != null) {
+          _manualSearchController.text = result.pokemonName != null
+              ? '${result.pokemonName} ${result.collectionNumber}'
+              : result.collectionNumber!;
+        } else if (result.pokemonName != null) {
+          _manualSearchController.text = result.pokemonName!;
+        }
+
         await _searchApi(
           pokemonName: result.pokemonName,
           collectionNumber: result.collectionNumber,
@@ -115,7 +124,7 @@ class _ScannerViewState extends State<ScannerView> {
         setState(() {
           _isProcessing = false;
           _errorMessage =
-              'No se detectó el texto de la carta claramente. Puedes buscarla manualmente abajo o introducir todos sus datos a mano.';
+              'No se detectó el texto de la carta claramente. Asegúrate de encuadrar de cerca con buena luz, o introduce el número abajo.';
         });
       }
     } catch (e) {
@@ -610,42 +619,82 @@ class _ScannerViewState extends State<ScannerView> {
   }
 
   Widget _buildImagePreview() {
-    return GestureDetector(
-      onTap: _captureImage,
-      child: Container(
-        height: 160,
-        decoration: BoxDecoration(
-          color: const Color(0xFF0F3460),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: Colors.amber.withValues(alpha: 0.4),
-            width: 1.5,
+    return Column(
+      children: [
+        GestureDetector(
+          onTap: () => _captureImage(ImageSource.camera),
+          child: Container(
+            height: 160,
+            decoration: BoxDecoration(
+              color: const Color(0xFF0F3460),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: Colors.amber.withValues(alpha: 0.4),
+                width: 1.5,
+              ),
+            ),
+            child: _capturedImage != null
+                ? ClipRRect(
+                    borderRadius: BorderRadius.circular(15),
+                    child: Image.file(_capturedImage!, fit: BoxFit.cover),
+                  )
+                : const Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.camera_alt, color: Colors.amber, size: 40),
+                      SizedBox(height: 8),
+                      Text('Toma una foto a cualquier carta TCG',
+                          style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold),
+                          textAlign: TextAlign.center),
+                      SizedBox(height: 4),
+                      Text(
+                          'Toca aquí para abrir la cámara o elige de tu galería abajo',
+                          style: TextStyle(color: Colors.white54, fontSize: 11),
+                          textAlign: TextAlign.center),
+                    ],
+                  ),
           ),
         ),
-        child: _capturedImage != null
-            ? ClipRRect(
-                borderRadius: BorderRadius.circular(15),
-                child: Image.file(_capturedImage!, fit: BoxFit.cover),
-              )
-            : const Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.camera_alt, color: Colors.amber, size: 40),
-                  SizedBox(height: 8),
-                  Text('Toma una foto a cualquier carta TCG',
-                      style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold),
-                      textAlign: TextAlign.center),
-                  SizedBox(height: 4),
-                  Text(
-                      'Pokémon, Magic, Yu-Gi-Oh!, Digimon, One Piece, Lorcana...',
-                      style: TextStyle(color: Colors.white54, fontSize: 11),
-                      textAlign: TextAlign.center),
-                ],
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(
+              child: ElevatedButton.icon(
+                onPressed: () => _captureImage(ImageSource.camera),
+                icon: const Icon(Icons.camera_alt, size: 16),
+                label: const Text('Hacer Foto',
+                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.amber,
+                  foregroundColor: Colors.black,
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
               ),
-      ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: OutlinedButton.icon(
+                onPressed: () => _captureImage(ImageSource.gallery),
+                icon: const Icon(Icons.photo_library,
+                    size: 16, color: Colors.white70),
+                label: const Text('Desde Galería',
+                    style: TextStyle(fontSize: 12, color: Colors.white70)),
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: Colors.white24),
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 
