@@ -70,18 +70,31 @@ class TcgApiService {
         );
 
         if (localCard != null) {
-          developer.log('⚡ Carta encontrada al instante en SQLite local: ${localCard.name} (${localCard.id})', name: 'TcgApiService');
-          // Enriquecer con Cardmarket prices rápidamente sin bloquear si la red falla
-          try {
-            final detail = await fetchCardDetail(
-              localCard.id,
-              lang: localCard.language ?? (language == CardLanguage.es ? 'es' : 'en'),
-            ).timeout(const Duration(milliseconds: 1500));
-            if (detail != null) {
-              return [detail];
-            }
-          } catch (_) {}
-          return [localCard];
+          // Si el usuario proporcionó un nombre (ej: "mega-sharpedo ex"), verificar que la carta
+          // encontrada en el catálogo local no sea un falso positivo (ej: otra carta con el mismo número)
+          final coreQuery = _extractCoreName(cleanQuery).toLowerCase().trim();
+          bool nameMatches = true;
+          if (coreQuery.isNotEmpty) {
+            final cardName = localCard.name.toLowerCase();
+            final tokens = coreQuery.split(RegExp(r'[\s\-_]+')).where((t) => t.length > 2).toList();
+            nameMatches = cardName.contains(coreQuery) || coreQuery.contains(cardName) ||
+                (tokens.isNotEmpty && tokens.any((tok) => cardName.contains(tok)));
+          }
+
+          if (nameMatches) {
+            developer.log('⚡ Carta encontrada al instante en SQLite local: ${localCard.name} (${localCard.id})', name: 'TcgApiService');
+            // Enriquecer con Cardmarket prices rápidamente sin bloquear si la red falla
+            try {
+              final detail = await fetchCardDetail(
+                localCard.id,
+                lang: localCard.language ?? (language == CardLanguage.es ? 'es' : 'en'),
+              ).timeout(const Duration(milliseconds: 1500));
+              if (detail != null) {
+                return [detail];
+              }
+            } catch (_) {}
+            return [localCard];
+          }
         }
       }
     }
@@ -131,19 +144,25 @@ class TcgApiService {
     try {
       List<PokemonCard> results = [];
 
-      // 1. PRIORIDAD MÁXIMA: Si hay número de colección (ej: "TG14/TG30", "012/028"), buscar primero por número/set
+      // 1. PRIORIDAD MÁXIMA: Si hay número de colección (ej: "TG14/TG30", "113/094"), buscar primero por número/set
       if (number != null && number.isNotEmpty) {
         results = await searchByCollectionNumber(number, language: language);
         if (results.isNotEmpty) {
-          // Si además hay un nombre detectado, ordenar/filtrar priorizando las que coincidan con el nombre
-          final coreQuery = _extractCoreName(query).toLowerCase();
+          // Si además hay un nombre detectado o introducido, ordenar y filtrar estrictamente
+          final coreQuery = _extractCoreName(query).toLowerCase().trim();
           if (coreQuery.isNotEmpty) {
-            final matches = results.where((c) =>
-                c.name.toLowerCase().contains(coreQuery) ||
-                coreQuery.contains(c.name.toLowerCase())).toList();
+            // Dividir el nombre en palabras clave (ej: "mega", "sharpedo")
+            final queryTokens = coreQuery.split(RegExp(r'[\s\-_]+')).where((t) => t.length > 2).toList();
+            
+            final matches = results.where((c) {
+              final cName = c.name.toLowerCase();
+              if (cName.contains(coreQuery) || coreQuery.contains(cName)) return true;
+              if (queryTokens.isNotEmpty && queryTokens.every((tok) => cName.contains(tok))) return true;
+              return false;
+            }).toList();
+
             if (matches.isNotEmpty) {
-              final rest = results.where((c) => !matches.contains(c)).toList();
-              return [...matches, ...rest];
+              return matches; // Retornar las que coinciden con el nombre buscado!
             }
           }
           return results;
@@ -297,21 +316,31 @@ class TcgApiService {
     }
 
     // 2. PRIORIDAD 1: Si tenemos el total del set (ej: /094 o /94), la fracción matemática
-    // es la clave inequívoca del set (ej: 94 cartas en "Phantasmal Flames" me02 para Mega-Sharpedo ex).
-    // Consultar primero estrictamente en el idioma elegido (ej: español) para que el nombre y set coincidan con el idioma.
+    // identifica los sets posibles.
+    // OJO: Varios sets comparten el mismo número oficial (ej: sm6 japonés tiene 94, sm11 tiene 94, me02 tiene 94).
+    // Por eso, DEBEMOS acumular TODAS las cartas encontradas en esos sets y NO devolver inmediatamente la primera.
+    // Así, si el usuario busca "mega-sharpedo ex" o la carta tiene nombre, coincidirá exactamente.
     if (totalInSet != null && totalInSet > 0) {
       final setLangs = [langCode, if (langCode != 'es') 'es', if (langCode != 'en') 'en', 'ja'];
+      final fractionCards = <PokemonCard>[];
+      final seenFractionIds = <String>{};
+
       for (final l in setLangs) {
         final setIds = await _findSetsByOfficialCount(totalInSet, lang: l);
-        for (final sId in setIds.take(4)) {
+        for (final sId in setIds) {
           for (final numCand in candidateNumbers) {
             final directCard = await _fetchCardBySetAndNumber(sId, numCand, lang: l);
-            if (directCard != null) {
-              final detail = await fetchCardDetail(directCard.id, lang: l);
-              return [detail ?? directCard];
+            if (directCard != null && !seenFractionIds.contains(directCard.id)) {
+              seenFractionIds.add(directCard.id);
+              fractionCards.add(directCard);
             }
           }
         }
+        if (fractionCards.isNotEmpty) break;
+      }
+
+      if (fractionCards.isNotEmpty) {
+        return fractionCards;
       }
     }
 

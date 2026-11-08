@@ -393,7 +393,15 @@ class _ScannerViewState extends State<ScannerView> {
       ' ',
     ).trim();
 
-    // 1. Buscar número de colección XXX/YYY (ej: "140/195", "070/280")
+    // 1. Buscar número de colección XXX/YYY (ej: "113/094", "113/94", "140/195")
+    // con soporte para prefijos opcionales delante (ej: "pfl 113/094" o "TG14/TG30")
+    final matchFractionWithPrefix = RegExp(r'\b([A-Za-z]{2,6})\s+(\d{1,4}/\d{1,4})\b').firstMatch(clean);
+    if (matchFractionWithPrefix != null) {
+      final number = '${matchFractionWithPrefix.group(1)} ${matchFractionWithPrefix.group(2)}';
+      final name = clean.replaceFirst(matchFractionWithPrefix.group(0)!, '').trim();
+      return (name, number);
+    }
+
     final matchFraction = RegExp(r'\b(\d{1,4}/\d{1,4})\b').firstMatch(clean);
     if (matchFraction != null) {
       final number = matchFraction.group(1)!;
