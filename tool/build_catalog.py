@@ -157,9 +157,21 @@ for s_id in asian_sets:
 
 # 6. Descargar cartas de sets occidentales populares (Inglés y Español)
 western_sets = [
-    'sv01', 'sv02', 'sv03', 'sv03.5', 'sv04', 'sv04.5', 'sv05', 'sv06', 'sv07', 'sv08', 'sv08.5',
-    'crz', 'swsh12', 'swsh12.5', 'swsh11', 'swsh10', 'swsh9', 'swsh8', 'swsh7', 'swsh6', 'swsh5', 'swsh4', 'swsh3', 'swsh2', 'swsh1',
-    'sm8', 'xy10', 'xy7'
+    # ── Era Escarlata y Púrpura (Scarlet & Violet) ──
+    'sv01', 'sv02', 'sv03', 'sv03.5', 'sv04', 'sv04.5', 'sv05', 'sv06', 'sv06.5', 'sv07', 'sv08', 'sv08.5',
+    'svp',
+    # ── Mega Evolution (me) ──
+    'me01', 'me02', 'me02.5', 'me03', 'me04', 'me05', 'me06', 'mep',
+    # ── Era Espada y Escudo (Sword & Shield) ──
+    'swsh1', 'swsh2', 'swsh3', 'swsh3.5', 'swsh4', 'swsh4.5', 'swsh5', 'swsh6', 'swsh7', 'swsh8',
+    'swsh9', 'swsh10', 'swsh11', 'swsh12', 'swsh12.5', 'crz', 'swshp',
+    # ── Sub-sets Trainer Gallery (TG) y Galarian Gallery (GG) ──
+    'swsh9tg', 'swsh10tg', 'swsh11tg', 'swsh12tg', 'swsh12.5gg',
+    # ── Era Sol y Luna (Sun & Moon) y XY ──
+    'sm1', 'sm2', 'sm3', 'sm3.5', 'sm4', 'sm5', 'sm6', 'sm7', 'sm7.5', 'sm8', 'sm9', 'sm10', 'sm11', 'sm115', 'sm12',
+    'xy1', 'xy2', 'xy3', 'xy4', 'xy5', 'xy6', 'xy7', 'xy8', 'xy9', 'xy10', 'xy11', 'xy12',
+    # ── Sets clásicos Blanco y Negro ──
+    'bw1', 'bw2', 'bw3', 'bw4', 'bw5', 'bw6', 'bw7', 'bw8', 'bw9', 'bw10', 'bw11'
 ]
 print(f"Descargando cartas de sets occidentales (EN / ES)...")
 for s_id in western_sets:

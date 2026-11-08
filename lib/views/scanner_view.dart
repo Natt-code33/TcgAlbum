@@ -393,19 +393,21 @@ class _ScannerViewState extends State<ScannerView> {
       ' ',
     ).trim();
 
-    // 1. Buscar número de colección XXX/YYY (ej: "113/094", "113/94", "140/195")
-    // con soporte para prefijos opcionales delante (ej: "pfl 113/094" o "TG14/TG30")
-    final matchFractionWithPrefix = RegExp(r'\b([A-Za-z]{2,6})\s+(\d{1,4}/\d{1,4})\b').firstMatch(clean);
-    if (matchFractionWithPrefix != null) {
-      final number = '${matchFractionWithPrefix.group(1)} ${matchFractionWithPrefix.group(2)}';
-      final name = clean.replaceFirst(matchFractionWithPrefix.group(0)!, '').trim();
-      return (name, number);
+    // 1. Buscar número de colección con prefijo opcional (ej: "TG14/TG30", "GG54/GG70", "TG14/30", "pfl 113/094", "113/094")
+    final matchAlphaFraction = RegExp(r'\b([A-Za-z]{1,6})?(\d{1,4})/(?:[A-Za-z]{1,6})?(\d{1,4})\b').firstMatch(clean);
+    if (matchAlphaFraction != null) {
+      final prefix = matchAlphaFraction.group(1) ?? '';
+      final numPart = matchAlphaFraction.group(2)!;
+      final totalPart = matchAlphaFraction.group(3)!;
+      final fullNumber = prefix.isNotEmpty ? '$prefix$numPart/$totalPart' : '$numPart/$totalPart';
+      final name = clean.replaceFirst(matchAlphaFraction.group(0)!, '').trim();
+      return (name, fullNumber);
     }
 
-    final matchFraction = RegExp(r'\b(\d{1,4}/\d{1,4})\b').firstMatch(clean);
-    if (matchFraction != null) {
-      final number = matchFraction.group(1)!;
-      final name = clean.replaceFirst(matchFraction.group(0)!, '').trim();
+    final matchFractionWithPrefixSpace = RegExp(r'\b([A-Za-z]{2,6})\s+(\d{1,4}/\d{1,4})\b').firstMatch(clean);
+    if (matchFractionWithPrefixSpace != null) {
+      final number = '${matchFractionWithPrefixSpace.group(1)} ${matchFractionWithPrefixSpace.group(2)}';
+      final name = clean.replaceFirst(matchFractionWithPrefixSpace.group(0)!, '').trim();
       return (name, number);
     }
 

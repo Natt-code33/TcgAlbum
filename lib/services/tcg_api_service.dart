@@ -164,8 +164,11 @@ class TcgApiService {
             if (matches.isNotEmpty) {
               return matches; // Retornar las que coinciden con el nombre buscado!
             }
+            // Si el filtro por nombre descartó todas las candidatas del número, no devolver cartas no coincidentes;
+            // caer directamente a la búsqueda por nombre!
+          } else {
+            return results;
           }
-          return results;
         }
 
         // Si la búsqueda por número directo no arrojó resultados y hay nombre, probar nombre + número
@@ -175,7 +178,7 @@ class TcgApiService {
         }
       }
 
-      // 2. Solo si no hay número o no devolvió resultados, buscar por nombre
+      // 2. Solo si no hay número o no devolvió resultados coincidentes, buscar por nombre
       if (query.isNotEmpty) {
         results = await searchByName(query, language: language);
       }
@@ -808,12 +811,20 @@ class TcgApiService {
       final List<String> matching = [];
       for (final s in cachedSets) {
         final count = s['cardCount'] as Map<String, dynamic>?;
-        if (count?['official'] == officialCount) {
+        if (count?['official'] == officialCount || count?['total'] == officialCount) {
           final id = s['id'] as String?;
           if (id != null) matching.add(id);
         }
       }
-      return matching.take(4).toList();
+      // Priorizar sub-sets tipo galería (tg/gg) y retornar hasta 12 sets
+      matching.sort((a, b) {
+        final aGallery = a.contains('tg') || a.contains('gg');
+        final bGallery = b.contains('tg') || b.contains('gg');
+        if (aGallery && !bGallery) return -1;
+        if (!aGallery && bGallery) return 1;
+        return b.compareTo(a);
+      });
+      return matching.take(12).toList();
     } catch (_) {
       return [];
     }

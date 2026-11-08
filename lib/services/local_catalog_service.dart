@@ -198,7 +198,7 @@ class LocalCatalogService {
 
     try {
       final rows = await _db!.rawQuery(
-        'SELECT id FROM sets WHERE official_count = ? OR total_count = ? LIMIT 5',
+        'SELECT id FROM sets WHERE official_count = ? OR total_count = ? ORDER BY CASE WHEN id LIKE "%tg" OR id LIKE "%gg" THEN 0 ELSE 1 END, id DESC LIMIT 15',
         [officialCount, officialCount],
       );
       return rows.map((r) => r['id'] as String).toList();
