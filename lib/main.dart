@@ -6,6 +6,7 @@
 import 'package:flutter/material.dart';
 import 'views/album_view.dart';
 import 'services/local_catalog_service.dart';
+import 'theme/app_theme.dart';
 
 void main() async {
   // Necesario para inicializar bindings de Flutter antes de
@@ -24,16 +25,9 @@ class PokemonAlbumApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'PokéÁlbum',
+      title: 'TcgAlbum',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF00B4D8),
-          brightness: Brightness.dark,
-        ),
-        useMaterial3: true,
-        fontFamily: 'Roboto',
-      ),
+      theme: AppTheme.darkTheme,
       home: const AlbumView(),
     );
   }

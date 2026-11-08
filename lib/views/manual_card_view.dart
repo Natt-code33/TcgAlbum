@@ -8,10 +8,12 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import '../models/pokemon_card.dart';
 import '../services/album_storage_service.dart';
 import '../services/ocr_service.dart';
+import '../theme/app_theme.dart';
 
 class ManualCardView extends StatefulWidget {
   final PokemonCard? cardToEdit;
@@ -304,22 +306,25 @@ class _ManualCardViewState extends State<ManualCardView> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF1A1A2E),
+      backgroundColor: AppTheme.bgDark,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF16213E),
         title: Text(
           widget.cardToEdit != null ? 'Editar Carta' : 'Añadir Carta Manualmente',
-          style: const TextStyle(color: Colors.white, fontSize: 18),
+          style: GoogleFonts.outfit(color: Colors.white, fontSize: 19, fontWeight: FontWeight.bold),
         ),
         iconTheme: const IconThemeData(color: Colors.white),
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Form(
-          key: _formKey,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: AppTheme.bgGradient,
+        ),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Form(
+            key: _formKey,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
               // ── Selector de Franquicia TCG ──────────────────────────────
               _buildGameSelector(),
 
@@ -452,6 +457,7 @@ class _ManualCardViewState extends State<ManualCardView> {
           ),
         ),
       ),
+      ),
     );
   }
 
@@ -490,11 +496,13 @@ class _ManualCardViewState extends State<ManualCardView> {
             child: Row(
               children: availableGames.map((game) {
                 final isSelected = _selectedGame == game;
+                final color = Color(game.colorHex);
                 return Padding(
                   padding: const EdgeInsets.only(right: 6),
                   child: ChoiceChip(
+                    avatar: Icon(game.iconData, size: 14, color: isSelected ? Colors.black : color),
                     label: Text(
-                      '${game.icon} ${game.label}',
+                      game.label,
                       style: TextStyle(
                         color: isSelected ? Colors.black : Colors.white70,
                         fontSize: 12,
@@ -503,12 +511,10 @@ class _ManualCardViewState extends State<ManualCardView> {
                       ),
                     ),
                     selected: isSelected,
-                    selectedColor: Color(game.colorHex),
+                    selectedColor: color,
                     backgroundColor: const Color(0xFF0F3460),
                     side: BorderSide(
-                      color: isSelected
-                          ? Color(game.colorHex)
-                          : Colors.white24,
+                      color: isSelected ? color : Colors.white24,
                     ),
                     onSelected: (selected) {
                       if (selected) setState(() => _selectedGame = game);

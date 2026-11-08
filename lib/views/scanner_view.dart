@@ -9,12 +9,15 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 import '../models/pokemon_card.dart';
 import '../services/album_storage_service.dart';
 import '../services/ocr_service.dart';
 import '../services/tcg_api_service.dart';
 import '../services/image_matching_service.dart';
+import '../theme/app_theme.dart';
+import '../widgets/game_badge.dart';
 import 'manual_card_view.dart';
 
 class ScannerView extends StatefulWidget {
@@ -455,25 +458,28 @@ class _ScannerViewState extends State<ScannerView> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF1A1A2E),
+      backgroundColor: AppTheme.bgDark,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF16213E),
-        title: const Text('Escanear o Buscar Carta TCG',
-            style: TextStyle(color: Colors.white, fontSize: 18)),
+        title: Text('Escanear o Buscar Carta TCG',
+            style: GoogleFonts.outfit(color: Colors.white, fontSize: 19, fontWeight: FontWeight.bold)),
         iconTheme: const IconThemeData(color: Colors.white),
         actions: [
           IconButton(
-            icon: const Icon(Icons.edit_note, color: Colors.amber),
+            icon: const Icon(Icons.edit_note_rounded, color: AppTheme.primary),
             tooltip: 'Añadir datos manualmente',
             onPressed: _openManualEntry,
           ),
         ],
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: AppTheme.bgGradient,
+        ),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
             // ── Selector de Franquicia TCG ────────────────────────────────
             _buildGameSelector(),
 
@@ -533,6 +539,7 @@ class _ScannerViewState extends State<ScannerView> {
           ],
         ),
       ),
+      ),
     );
   }
 
@@ -568,11 +575,13 @@ class _ScannerViewState extends State<ScannerView> {
             child: Row(
               children: TcgGame.values.map((game) {
                 final isSelected = _selectedGame == game;
+                final color = Color(game.colorHex);
                 return Padding(
                   padding: const EdgeInsets.only(right: 6),
                   child: ChoiceChip(
+                    avatar: Icon(game.iconData, size: 14, color: isSelected ? Colors.black : color),
                     label: Text(
-                      '${game.icon} ${game.label}',
+                      game.label,
                       style: TextStyle(
                         color: isSelected ? Colors.black : Colors.white70,
                         fontSize: 12,
@@ -581,11 +590,11 @@ class _ScannerViewState extends State<ScannerView> {
                       ),
                     ),
                     selected: isSelected,
-                    selectedColor: Color(game.colorHex),
+                    selectedColor: color,
                     backgroundColor: const Color(0xFF0F3460),
                     side: BorderSide(
                       color: isSelected
-                          ? Color(game.colorHex)
+                          ? color
                           : Colors.white24,
                     ),
                     onSelected: (selected) {
@@ -833,7 +842,7 @@ class _ScannerViewState extends State<ScannerView> {
 
   Widget _buildQuickChip(String label, TcgGame game) {
     return ActionChip(
-      avatar: Text(game.icon, style: const TextStyle(fontSize: 12)),
+      avatar: Icon(game.iconData, size: 14, color: Color(game.colorHex)),
       label: Text(label,
           style: const TextStyle(color: Colors.white70, fontSize: 11)),
       backgroundColor: const Color(0xFF0F3460),
@@ -858,7 +867,7 @@ class _ScannerViewState extends State<ScannerView> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('✅ OCR leído de la carta:',
+          const Text('Texto detectado por OCR:',
               style: TextStyle(
                   color: Colors.greenAccent, fontWeight: FontWeight.bold)),
           if (_ocrResult!.pokemonName != null)
@@ -1003,24 +1012,7 @@ class _ScannerViewState extends State<ScannerView> {
                     fontWeight: FontWeight.bold),
               ),
               const Spacer(),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: Color(card.game.colorHex).withValues(alpha: 0.2),
-                  borderRadius: BorderRadius.circular(6),
-                  border:
-                      Border.all(color: Color(card.game.colorHex), width: 1),
-                ),
-                child: Text(
-                  '${card.game.icon} ${card.game.label}',
-                  style: TextStyle(
-                    color: Color(card.game.colorHex),
-                    fontSize: 11,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
+              GameBadge(game: card.game),
             ],
           ),
           const SizedBox(height: 12),
@@ -1068,7 +1060,7 @@ class _ScannerViewState extends State<ScannerView> {
             child: Column(
               children: [
                 _InfoRow(label: 'Nombre', value: card.name),
-                _InfoRow(label: 'Juego / TCG', value: '${card.game.icon} ${card.game.label}'),
+                _InfoRow(label: 'Juego / TCG', value: card.game.label),
                 if (_visualScores.containsKey(card.id))
                   _InfoRow(
                     label: 'Coincidencia de arte',
@@ -1251,23 +1243,7 @@ class _ResultCard extends StatelessWidget {
                             ),
                           ),
                         ],
-                        Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 6, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: Color(card.game.colorHex)
-                                .withValues(alpha: 0.2),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(
-                            '${card.game.icon} ${card.game.label}',
-                            style: TextStyle(
-                              color: Color(card.game.colorHex),
-                              fontSize: 9.5,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
+                        GameBadge(game: card.game, fontSize: 9, iconSize: 11),
                       ],
                     ),
                     const SizedBox(height: 4),

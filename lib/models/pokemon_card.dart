@@ -11,26 +11,28 @@
 // - Otros TCG
 // ============================================================
 
+import 'package:flutter/material.dart';
+
 /// Juegos TCG soportados en la aplicación.
 enum TcgGame {
-  all(id: 'all', label: 'Todo / Auto', icon: '🌐', colorHex: 0xFF00B4D8),
-  pokemon(id: 'pokemon', label: 'Pokémon', icon: '⚡', colorHex: 0xFFFFCB05),
-  magic(id: 'magic', label: 'Magic (MTG)', icon: '🔮', colorHex: 0xFFE67E22),
-  yugioh(id: 'yugioh', label: 'Yu-Gi-Oh!', icon: '👁️', colorHex: 0xFF9B59B6),
-  digimon(id: 'digimon', label: 'Digimon', icon: '🦖', colorHex: 0xFF3498DB),
-  onepiece(id: 'onepiece', label: 'One Piece', icon: '🏴‍☠️', colorHex: 0xFFE74C3C),
-  lorcana(id: 'lorcana', label: 'Lorcana', icon: '✨', colorHex: 0xFF1ABC9C),
-  other(id: 'other', label: 'Otro TCG', icon: '🃏', colorHex: 0xFF95A5A6);
+  all(id: 'all', label: 'Todo / Auto', iconData: Icons.public, colorHex: 0xFF00E5FF),
+  pokemon(id: 'pokemon', label: 'Pokémon', iconData: Icons.bolt, colorHex: 0xFFFFB800),
+  magic(id: 'magic', label: 'Magic (MTG)', iconData: Icons.auto_awesome, colorHex: 0xFFE67E22),
+  yugioh(id: 'yugioh', label: 'Yu-Gi-Oh!', iconData: Icons.visibility, colorHex: 0xFF9B59B6),
+  digimon(id: 'digimon', label: 'Digimon', iconData: Icons.memory, colorHex: 0xFF3498DB),
+  onepiece(id: 'onepiece', label: 'One Piece', iconData: Icons.sailing, colorHex: 0xFFE74C3C),
+  lorcana(id: 'lorcana', label: 'Lorcana', iconData: Icons.auto_fix_high, colorHex: 0xFF1ABC9C),
+  other(id: 'other', label: 'Otro TCG', iconData: Icons.casino, colorHex: 0xFF95A5A6);
 
   final String id;
   final String label;
-  final String icon;
+  final IconData iconData;
   final int colorHex;
 
   const TcgGame({
     required this.id,
     required this.label,
-    required this.icon,
+    required this.iconData,
     required this.colorHex,
   });
 
