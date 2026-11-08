@@ -100,7 +100,9 @@ class TcgApiService {
 
       // Si TCGdex no arrojó resultados o arrojó muy pocos, consultar pokemontcg.io (Base completa)
       if (results.isEmpty) {
-        final ioResults = await _searchPokemonTcgIo(query: query, number: number);
+        final translatedQuery = _translateAsianPokemonName(query);
+        final ioQuery = translatedQuery.isNotEmpty ? translatedQuery : query;
+        final ioResults = await _searchPokemonTcgIo(query: ioQuery, number: number);
         if (ioResults.isNotEmpty) return ioResults;
       }
 
@@ -154,6 +156,15 @@ class TcgApiService {
           if (allCards.isNotEmpty) break;
         }
       } catch (_) {}
+    }
+
+    // Si no encontró resultados con el nombre asiático en TCGdex, intentar traducir a inglés
+    if (allCards.isEmpty) {
+      final translated = _translateAsianPokemonName(coreName);
+      if (translated.isNotEmpty && translated.toLowerCase() != coreName.toLowerCase()) {
+        final enCards = await searchByName(translated, language: CardLanguage.en);
+        if (enCards.isNotEmpty) return enCards;
+      }
     }
 
     return allCards;
@@ -693,4 +704,204 @@ class TcgApiService {
       return null;
     }
   }
+
+  /// Traductor directo de nombres de Pokémon en Coreano, Japonés y Chino a su nombre en inglés.
+  /// Permite encontrar cartas cuando el endpoint local no tiene indexado el nombre o en pokemontcg.io.
+  String _translateAsianPokemonName(String name) {
+    final clean = name.trim();
+    if (clean.isEmpty) return '';
+
+    // Coincidencia exacta en el diccionario multilingüe
+    if (_pokemonMultilangMap.containsKey(clean)) {
+      return _pokemonMultilangMap[clean]!;
+    }
+
+    // Coincidencia parcial (por ejemplo si contiene "ex", "vmax", sufijos o espacios)
+    for (final entry in _pokemonMultilangMap.entries) {
+      if (clean.contains(entry.key)) {
+        return entry.value;
+      }
+    }
+
+    return '';
+  }
+
+  static const Map<String, String> _pokemonMultilangMap = {
+    // ── KOREAN (한국어) ─────────────────────────────────────────────────────────
+    '피카츄': 'Pikachu',
+    '라이츄': 'Raichu',
+    '피츄': 'Pichu',
+    '파이리': 'Charmander',
+    '리자드': 'Charmeleon',
+    '리자몽': 'Charizard',
+    '꼬부기': 'Squirtle',
+    '어니부기': 'Wartortle',
+    '거북왕': 'Blastoise',
+    '이상해씨': 'Bulbasaur',
+    '이상해풀': 'Ivysaur',
+    '이상해꽃': 'Venusaur',
+    '이브이': 'Eevee',
+    '샤미드': 'Vaporeon',
+    '쥬피썬더': 'Jolteon',
+    '부스터': 'Flareon',
+    '에브이': 'Espeon',
+    '블래키': 'Umbreon',
+    '리피아': 'Leafeon',
+    '글레이시아': 'Glaceon',
+    '님피아': 'Sylveon',
+    '뮤': 'Mew',
+    '뮤츠': 'Mewtwo',
+    '팬텀': 'Gengar',
+    '고오스': 'Gastly',
+    '고우스트': 'Haunter',
+    '잠만보': 'Snorlax',
+    '망나뇽': 'Dragonite',
+    '미뇽': 'Dratini',
+    '신뇽': 'Dragonair',
+    '루카리오': 'Lucario',
+    '리오르': 'Riolu',
+    '레쿠쟈': 'Rayquaza',
+    '그란돈': 'Groudon',
+    '가이오가': 'Kyogre',
+    '루기아': 'Lugia',
+    '칠색조': 'Ho-Oh',
+    '아르세우스': 'Arceus',
+    '디아루가': 'Dialga',
+    '펄기아': 'Palkia',
+    '기라티나': 'Giratina',
+    '개굴닌자': 'Greninja',
+    '따라큐': 'Mimikyu',
+    '모르페코': 'Morpeko',
+    '잉어킹': 'Magikarp',
+    '갸라도스': 'Gyarados',
+    '라프라스': 'Lapras',
+    '토게피': 'Togepi',
+    '마릴': 'Marill',
+    '우츠보트': 'Victreebel',
+    '푸린': 'Jigglypuff',
+    '푸크린': 'Wigglytuff',
+    '냐옹': 'Meowth',
+    '가디': 'Growlithe',
+    '윈디': 'Arcanine',
+    '알통몬': 'Machop',
+    '근육몬': 'Machoke',
+    '괴력몬': 'Machamp',
+    '포니타': 'Ponyta',
+    '날쌩마': 'Rapidash',
+    '야돈': 'Slowpoke',
+    '야도란': 'Slowbro',
+    '팬텀 ex': 'Gengar ex',
+
+    // ── JAPANESE (日本語 - カタカナ/漢字) ──────────────────────────────────────────
+    'ピカチュウ': 'Pikachu',
+    'ライチュウ': 'Raichu',
+    'ピチュー': 'Pichu',
+    'ヒトカゲ': 'Charmander',
+    'リザード': 'Charmeleon',
+    'リザードン': 'Charizard',
+    'ゼニガメ': 'Squirtle',
+    'カメール': 'Wartortle',
+    'カメックス': 'Blastoise',
+    'フシギダネ': 'Bulbasaur',
+    'フシギソウ': 'Ivysaur',
+    'フシギバナ': 'Venusaur',
+    'イーブイ': 'Eevee',
+    'シャワーズ': 'Vaporeon',
+    'サンダース': 'Jolteon',
+    'ブースター': 'Flareon',
+    'エーフィ': 'Espeon',
+    'ブラッキー': 'Umbreon',
+    'リーフィア': 'Leafeon',
+    'グレイシア': 'Glaceon',
+    'ニンフィア': 'Sylveon',
+    'ミュウ': 'Mew',
+    'ミュウツー': 'Mewtwo',
+    'ゲンガー': 'Gengar',
+    'カビゴン': 'Snorlax',
+    'カイリュー': 'Dragonite',
+    'ルカリオ': 'Lucario',
+    'レックウザ': 'Rayquaza',
+    'グラードン': 'Groudon',
+    'カイオーガ': 'Kyogre',
+    'ルギア': 'Lugia',
+    'ホウオウ': 'Ho-Oh',
+    'アルセウス': 'Arceus',
+    'ディアルガ': 'Dialga',
+    'パルキア': 'Palkia',
+    'ギラティナ': 'Giratina',
+    'ゲッコウガ': 'Greninja',
+    'ミミッキュ': 'Mimikyu',
+    'コイキング': 'Magikarp',
+    'ギャラドス': 'Gyarados',
+    'ラプラス': 'Lapras',
+
+    // ── CHINESE (中文 - 简体/繁体) ──────────────────────────────────────────────
+    '皮卡丘': 'Pikachu',
+    '雷丘': 'Raichu',
+    '皮丘': 'Pichu',
+    '小火龙': 'Charmander',
+    '小火龍': 'Charmander',
+    '火恐龙': 'Charmeleon',
+    '火恐龍': 'Charmeleon',
+    '喷火龙': 'Charizard',
+    '噴火龍': 'Charizard',
+    '杰尼龟': 'Squirtle',
+    '傑尼龜': 'Squirtle',
+    '卡咪龟': 'Wartortle',
+    '卡咪龜': 'Wartortle',
+    '水箭龟': 'Blastoise',
+    '水箭龜': 'Blastoise',
+    '妙蛙种子': 'Bulbasaur',
+    '妙蛙種子': 'Bulbasaur',
+    '妙蛙草': 'Ivysaur',
+    '妙蛙花': 'Venusaur',
+    '伊布': 'Eevee',
+    '水伊布': 'Vaporeon',
+    '雷伊布': 'Jolteon',
+    '火伊布': 'Flareon',
+    '太阳伊布': 'Espeon',
+    '太陽伊布': 'Espeon',
+    '月亮伊布': 'Umbreon',
+    '叶伊布': 'Leafeon',
+    '葉伊布': 'Leafeon',
+    '冰伊布': 'Glaceon',
+    '仙子伊布': 'Sylveon',
+    '梦幻': 'Mew',
+    '夢幻': 'Mew',
+    '超梦': 'Mewtwo',
+    '超夢': 'Mewtwo',
+    '耿鬼': 'Gengar',
+    '卡比兽': 'Snorlax',
+    '卡比獸': 'Snorlax',
+    '快龙': 'Dragonite',
+    '快龍': 'Dragonite',
+    '路卡利欧': 'Lucario',
+    '路卡利歐': 'Lucario',
+    '烈空坐': 'Rayquaza',
+    '固拉多': 'Groudon',
+    '盖欧卡': 'Kyogre',
+    '蓋歐卡': 'Kyogre',
+    '洛奇亚': 'Lugia',
+    '洛奇亞': 'Lugia',
+    '凤王': 'Ho-Oh',
+    '鳳王': 'Ho-Oh',
+    '阿尔宙斯': 'Arceus',
+    '阿爾宙斯': 'Arceus',
+    '帝牙卢卡': 'Dialga',
+    '帝牙盧卡': 'Dialga',
+    '帕路奇亚': 'Palkia',
+    '帕路奇亞': 'Palkia',
+    '骑拉帝纳': 'Giratina',
+    '騎拉帝納': 'Giratina',
+    '甲贺忍蛙': 'Greninja',
+    '甲賀忍蛙': 'Greninja',
+    '谜拟丘': 'Mimikyu',
+    '謎擬丘': 'Mimikyu',
+    '鲤鱼王': 'Magikarp',
+    '鯉魚王': 'Magikarp',
+    '暴鲤龙': 'Gyarados',
+    '暴鯉龍': 'Gyarados',
+    '拉普拉斯': 'Lapras',
+  };
 }
+
