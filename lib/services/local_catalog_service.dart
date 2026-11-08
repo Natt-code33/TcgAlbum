@@ -85,7 +85,30 @@ class LocalCatalogService {
              es.contains(cleanName) || cleanName.contains(es);
     }
 
-    // ── 1. Búsqueda por Código de Set exacto (ej: "s8a", "sv2a", "cel25", "swsh12", "tg") ──
+    // ── 1. Búsqueda por Total del Set + Número (ej: "113/094", "113/94", "013/028") ──
+    // PRIORIDAD MÁXIMA: Si tenemos el total oficial del set (/094 o /94), la fracción matemática
+    // es un identificador mucho más estricto y fiable que cualquier texto o prefijo OCR confuso (ej: PLF vs me02).
+    if (totalInSet != null && totalInSet > 0) {
+      final rows = await _db!.rawQuery('''
+        SELECT c.*, s.name as set_name_text, s.official_count as set_official_count
+        FROM cards c
+        LEFT JOIN sets s ON c.set_id = s.id
+        WHERE (c.total_in_set = ? OR s.official_count = ? OR s.total_count = ?) 
+          AND (c.local_id = ? OR c.local_id = ? OR c.local_id = ? OR c.number_int = ?)
+        ORDER BY CASE WHEN s.official_count = ? THEN 0 ELSE 1 END
+      ''', [totalInSet, totalInSet, totalInSet, cleanCardNum, cleanNum, pad3, intNum, totalInSet]);
+
+      for (final r in rows) {
+        if (matchesCardName(r)) {
+          developer.log('⚡ Encontrada en catálogo local por total ($totalInSet / $cardNumber): ${r['id']}', name: 'LocalCatalogService');
+          return _mapRowToCard(r, language);
+        }
+      }
+    }
+
+    // ── 2. Búsqueda por Código de Set exacto (ej: "s8a", "sv2a", "cel25", "swsh12", "tg") ──
+    // Solo si no hubo fracción total o si el set explícito coincide. Si hay totalInSet pero el setCode
+    // no coincide con ese total (ej: PLF con total 94), se descartará para evitar colisiones erróneas.
     if (setCode != null && setCode.isNotEmpty) {
       final cleanSet = setCode.toLowerCase().trim();
       final rows = await _db!.rawQuery('''
@@ -97,27 +120,15 @@ class LocalCatalogService {
       ''', [cleanSet, '%$cleanSet%', cleanCardNum, cleanNum, pad3, intNum]);
 
       for (final r in rows) {
+        if (totalInSet != null && totalInSet > 0) {
+          final official = r['set_official_count'] as int?;
+          final total = r['total_in_set'] as int?;
+          if (official != null && official != totalInSet && total != null && total != totalInSet) {
+            continue; // Evitar sets que no cuadran con la fracción leída
+          }
+        }
         if (matchesCardName(r)) {
           developer.log('Encontrada en catálogo local por set_id ($cleanSet $cardNumber): ${r['id']}', name: 'LocalCatalogService');
-          return _mapRowToCard(r, language);
-        }
-      }
-    }
-
-    // ── 2. Búsqueda por Total del Set + Número (ej: total 28 y número 13 -> s8a Yveltal) ──
-    if (totalInSet != null && totalInSet > 0) {
-      final rows = await _db!.rawQuery('''
-        SELECT c.*, s.name as set_name_text, s.official_count as set_official_count
-        FROM cards c
-        LEFT JOIN sets s ON c.set_id = s.id
-        WHERE (c.total_in_set = ? OR s.official_count = ?) 
-          AND (c.local_id = ? OR c.local_id = ? OR c.local_id = ? OR c.number_int = ?)
-        ORDER BY CASE WHEN s.official_count = ? THEN 0 ELSE 1 END
-      ''', [totalInSet, totalInSet, cleanCardNum, cleanNum, pad3, intNum, totalInSet]);
-
-      for (final r in rows) {
-        if (matchesCardName(r)) {
-          developer.log('Encontrada en catálogo local por total ($totalInSet / $cardNumber): ${r['id']}', name: 'LocalCatalogService');
           return _mapRowToCard(r, language);
         }
       }
@@ -202,27 +213,36 @@ class LocalCatalogService {
     final nameEs = row['name_es'] as String?;
     final setId = (row['set_id'] as String? ?? '').toLowerCase();
 
-    // Elegir el nombre según el idioma deseado o detectado
+    // Elegir el nombre según el idioma deseado o detectado de forma rigurosa
     String chosenName;
     String chosenLang;
 
     if (language == CardLanguage.ja) {
       chosenName = (nameJa != null && nameJa.isNotEmpty) ? nameJa : (nameEn ?? nameEs ?? 'Carta');
-      chosenLang = 'ja';
+      chosenLang = (nameJa != null && nameJa.isNotEmpty) ? 'ja' : 'en';
     } else if (language == CardLanguage.es) {
       chosenName = (nameEs != null && nameEs.isNotEmpty) ? nameEs : (nameEn ?? nameJa ?? 'Carta');
-      chosenLang = (nameEs != null && nameEs.isNotEmpty) ? 'es' : (nameEn != null ? 'en' : 'ja');
+      chosenLang = (nameEs != null && nameEs.isNotEmpty) ? 'es' : 'en';
     } else if (language == CardLanguage.en) {
       chosenName = (nameEn != null && nameEn.isNotEmpty) ? nameEn : (nameEs ?? nameJa ?? 'Card');
-      chosenLang = (nameEn != null && nameEn.isNotEmpty) ? 'en' : (nameEs != null ? 'es' : 'ja');
+      chosenLang = 'en';
+    } else if (language == CardLanguage.ko) {
+      chosenName = nameEn ?? nameEs ?? nameJa ?? 'Carta';
+      chosenLang = 'ko';
+    } else if (language == CardLanguage.zh) {
+      chosenName = nameEn ?? nameEs ?? nameJa ?? 'Carta';
+      chosenLang = 'zh-tw';
     } else {
-      // Auto: si tiene nombre en japonés y el set es claramente asiático, preferir japonés
-      if (nameJa != null && nameJa.isNotEmpty && (setId == 's8a' || setId == 's12a' || setId == 'sv2a' || setId == 'sv4a')) {
+      // Auto: si tiene nombre en español, preferir español; si es set japonés, japonés; si no, inglés
+      if (nameEs != null && nameEs.isNotEmpty && setId != 's8a' && setId != 's12a' && setId != 'sv2a') {
+        chosenName = nameEs;
+        chosenLang = 'es';
+      } else if (nameJa != null && nameJa.isNotEmpty && (setId == 's8a' || setId == 's12a' || setId == 'sv2a' || setId == 'sv4a')) {
         chosenName = nameJa;
         chosenLang = 'ja';
       } else {
-        chosenName = nameEs ?? nameEn ?? nameJa ?? 'Carta';
-        chosenLang = nameEs != null ? 'es' : (nameEn != null ? 'en' : 'ja');
+        chosenName = nameEn ?? nameEs ?? nameJa ?? 'Carta';
+        chosenLang = nameEn != null ? 'en' : (nameEs != null ? 'es' : 'ja');
       }
     }
 
@@ -233,9 +253,13 @@ class LocalCatalogService {
     final totalInSet = (row['total_in_set'] as int?) ?? (row['set_official_count'] as int?);
     var imageUrl = (row['image_url'] as String?) ?? '';
 
-    // Si se desea español y la imagen apunta a /en/, intentar usar /es/
+    // Si se desea español o inglés, sincronizar la URL de la imagen si procede
     if (chosenLang == 'es' && imageUrl.contains('/en/')) {
       imageUrl = imageUrl.replaceAll('/en/', '/es/');
+    } else if (chosenLang == 'en' && imageUrl.contains('/es/')) {
+      imageUrl = imageUrl.replaceAll('/es/', '/en/');
+    } else if (chosenLang == 'ja' && imageUrl.contains('/en/')) {
+      imageUrl = imageUrl.replaceAll('/en/', '/ja/');
     }
 
     return PokemonCard(

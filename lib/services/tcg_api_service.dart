@@ -278,8 +278,44 @@ class TcgApiService {
   }) async {
     final langCode = language.apiCode == 'auto' ? 'en' : language.apiCode;
 
-    // 0. Comprobar si el identificador incluye el código de set explícito o prefijo alfabético
-    // Ejemplos: "TG14/TG30", "TG14", "GG54/GG70", "s8a 012/028", "s8a-012", "SV4a 025/190"
+    // 1. Extraer número y total del set de la fracción (ej: "113/094" o "113/94")
+    final parts = collectionNumber.split('/');
+    final rawFull = parts[0].trim();
+    final rawDigits = rawFull.replaceAll(RegExp(r'[^\d]'), '').trim();
+    final intNumber = int.tryParse(rawDigits);
+    final totalInSet = parts.length > 1
+        ? int.tryParse(parts[1].replaceAll(RegExp(r'[^\d]'), '').trim())
+        : null;
+
+    final candidateNumbers = <String>{rawFull};
+    if (rawDigits.isNotEmpty) {
+      candidateNumbers.add(rawDigits);
+    }
+    if (intNumber != null) {
+      candidateNumbers.add(intNumber.toString());
+      candidateNumbers.add(intNumber.toString().padLeft(3, '0'));
+    }
+
+    // 2. PRIORIDAD 1: Si tenemos el total del set (ej: /094 o /94), la fracción matemática
+    // es la clave inequívoca del set (ej: 94 cartas en "Phantasmal Flames" me02 para Mega-Sharpedo ex).
+    // Consultar primero estrictamente en el idioma elegido (ej: español) para que el nombre y set coincidan con el idioma.
+    if (totalInSet != null && totalInSet > 0) {
+      final setLangs = [langCode, if (langCode != 'es') 'es', if (langCode != 'en') 'en', 'ja'];
+      for (final l in setLangs) {
+        final setIds = await _findSetsByOfficialCount(totalInSet, lang: l);
+        for (final sId in setIds.take(4)) {
+          for (final numCand in candidateNumbers) {
+            final directCard = await _fetchCardBySetAndNumber(sId, numCand, lang: l);
+            if (directCard != null) {
+              final detail = await fetchCardDetail(directCard.id, lang: l);
+              return [detail ?? directCard];
+            }
+          }
+        }
+      }
+    }
+
+    // 3. PRIORIDAD 2: Prefijo explícito de set con número (ej: "TG14/TG30", "GG54/GG70", "s8a-012")
     final setWithNumberMatch = RegExp(r'(?:^|\b)([A-Za-z0-9]{2,6})\s*[-–_\s]?\s*(\d{1,4})(?:/\d{1,4})?')
         .firstMatch(collectionNumber.trim());
 
@@ -300,8 +336,8 @@ class TcgApiService {
         candidateNums.add('${setCode.toUpperCase()}${intNum.toString().padLeft(2, '0')}');
       }
 
-      // Intentar primero en el idioma detectado/solicitado, luego en japonés, inglés y español
-      final langsToTry = {langCode, 'ja', 'en', 'es'};
+      // Probar prioritariamente en el idioma solicitado
+      final langsToTry = [langCode, if (langCode != 'es') 'es', if (langCode != 'en') 'en', 'ja'];
       for (final l in langsToTry) {
         for (final numCandidate in candidateNums) {
           final directCard = await _fetchCardBySetAndNumber(setId, numCandidate, lang: l);
@@ -313,47 +349,10 @@ class TcgApiService {
       }
     }
 
-    // 1. Extraer número con y sin prefijo alfabético y total del set
-    final parts = collectionNumber.split('/');
-    final rawFull = parts[0].trim();
-    final rawDigits = rawFull.replaceAll(RegExp(r'[^\d]'), '').trim();
-    final intNumber = int.tryParse(rawDigits);
-    final totalInSet = parts.length > 1
-        ? int.tryParse(parts[1].replaceAll(RegExp(r'[^\d]'), '').trim())
-        : null;
-
-    if (rawFull.isEmpty) return [];
-
-    final candidateNumbers = <String>{rawFull};
-    if (rawDigits.isNotEmpty) {
-      candidateNumbers.add(rawDigits);
-    }
-    if (intNumber != null) {
-      candidateNumbers.add(intNumber.toString());
-      candidateNumbers.add(intNumber.toString().padLeft(3, '0'));
-    }
-
-    // 2. Si tenemos el total del set (ej: /028), buscar directamente el set oficial que tiene esa cantidad de cartas!
-    if (totalInSet != null) {
-      final setLangs = {langCode, 'es', 'en', 'ja'};
-      for (final l in setLangs) {
-        final setIds = await _findSetsByOfficialCount(totalInSet, lang: l);
-        for (final sId in setIds.take(3)) {
-          for (final numCand in candidateNumbers) {
-            final directCard = await _fetchCardBySetAndNumber(sId, numCand, lang: l);
-            if (directCard != null) {
-              final detail = await fetchCardDetail(directCard.id, lang: l);
-              return [detail ?? directCard];
-            }
-          }
-        }
-      }
-    }
-
-    // 3. Búsqueda amplia por localId en TCGdex
+    // 4. Búsqueda amplia por localId en TCGdex respetando el idioma elegido
     final allMatchedCards = <PokemonCard>[];
     final seenIds = <String>{};
-    final langsToSearch = {langCode, 'en', 'es'};
+    final langsToSearch = [langCode, if (langCode != 'es') 'es', if (langCode != 'en') 'en'];
 
     for (final l in langsToSearch) {
       for (final numCandidate in candidateNumbers) {
