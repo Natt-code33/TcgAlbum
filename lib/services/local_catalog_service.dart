@@ -72,6 +72,7 @@ class LocalCatalogService {
     final cleanNum = cardNumber.replaceAll(RegExp(r'[^\d]'), '').trim();
     final intNum = int.tryParse(cleanNum);
     final pad3 = cleanNum.isNotEmpty ? cleanNum.padLeft(3, '0') : cleanNum;
+    final cleanCardNum = cardNumber.trim();
     final cleanName = cardName?.trim().toLowerCase();
 
     bool matchesCardName(Map<String, dynamic> row) {
@@ -84,15 +85,16 @@ class LocalCatalogService {
              es.contains(cleanName) || cleanName.contains(es);
     }
 
-    // ── 1. Búsqueda por Código de Set exacto (ej: "s8a", "sv2a", "cel25", "swsh12") ──
+    // ── 1. Búsqueda por Código de Set exacto (ej: "s8a", "sv2a", "cel25", "swsh12", "tg") ──
     if (setCode != null && setCode.isNotEmpty) {
       final cleanSet = setCode.toLowerCase().trim();
       final rows = await _db!.rawQuery('''
         SELECT c.*, s.name as set_name_text, s.official_count as set_official_count
         FROM cards c
         LEFT JOIN sets s ON c.set_id = s.id
-        WHERE c.set_id = ? AND (c.local_id = ? OR c.local_id = ? OR c.number_int = ?)
-      ''', [cleanSet, cardNumber, pad3, intNum]);
+        WHERE (c.set_id = ? OR c.id LIKE ?) 
+          AND (c.local_id = ? OR c.local_id = ? OR c.local_id = ? OR c.number_int = ?)
+      ''', [cleanSet, '%$cleanSet%', cleanCardNum, cleanNum, pad3, intNum]);
 
       for (final r in rows) {
         if (matchesCardName(r)) {
@@ -109,9 +111,9 @@ class LocalCatalogService {
         FROM cards c
         LEFT JOIN sets s ON c.set_id = s.id
         WHERE (c.total_in_set = ? OR s.official_count = ?) 
-          AND (c.local_id = ? OR c.local_id = ? OR c.number_int = ?)
+          AND (c.local_id = ? OR c.local_id = ? OR c.local_id = ? OR c.number_int = ?)
         ORDER BY CASE WHEN s.official_count = ? THEN 0 ELSE 1 END
-      ''', [totalInSet, totalInSet, cardNumber, pad3, intNum, totalInSet]);
+      ''', [totalInSet, totalInSet, cleanCardNum, cleanNum, pad3, intNum, totalInSet]);
 
       for (final r in rows) {
         if (matchesCardName(r)) {
@@ -123,15 +125,15 @@ class LocalCatalogService {
 
     // ── 3. Búsqueda por Nombre Y Número coincidentes ──
     // IMPORTANTE: NUNCA buscar solo por número sin nombre, porque el número "121" existe en docenas de sets.
-    if (cleanName != null && cleanName.isNotEmpty && (cleanNum.isNotEmpty || cardNumber.isNotEmpty)) {
+    if (cleanName != null && cleanName.isNotEmpty && (cleanNum.isNotEmpty || cleanCardNum.isNotEmpty)) {
       final rows = await _db!.rawQuery('''
         SELECT c.*, s.name as set_name_text, s.official_count as set_official_count
         FROM cards c
         LEFT JOIN sets s ON c.set_id = s.id
-        WHERE (c.local_id = ? OR c.local_id = ? OR c.number_int = ?)
+        WHERE (c.local_id = ? OR c.local_id = ? OR c.local_id = ? OR c.number_int = ?)
           AND (c.name_ja LIKE ? OR c.name_en LIKE ? OR c.name_es LIKE ?)
         LIMIT 5
-      ''', [cardNumber, pad3, intNum, '%$cleanName%', '%$cleanName%', '%$cleanName%']);
+      ''', [cleanCardNum, cleanNum, pad3, intNum, '%$cleanName%', '%$cleanName%', '%$cleanName%']);
 
       if (rows.isNotEmpty) {
         developer.log('Encontrada en catálogo local por nombre+número ($cleanName #$cardNumber): ${rows.first['id']}', name: 'LocalCatalogService');

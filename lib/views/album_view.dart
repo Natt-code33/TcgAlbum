@@ -414,34 +414,96 @@ class _AlbumViewState extends State<AlbumView> {
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(color: const Color(0xFF0F3460), borderRadius: BorderRadius.circular(10)),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
+              child: Column(
                 children: [
-                  Column(
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
                     children: [
-                      const Text('Cardmarket (Media)', style: TextStyle(color: Colors.white54, fontSize: 11)),
-                      const SizedBox(height: 4),
-                      Text(
-                        card.cardmarketPrices?.averageSellPrice != null
-                            ? '${card.cardmarketPrices!.averageSellPrice!.toStringAsFixed(2)} €'
-                            : (card.cardmarketPrices?.trendPrice != null
-                                ? '${card.cardmarketPrices!.trendPrice!.toStringAsFixed(2)} €'
-                                : 'No disponible'),
-                        style: const TextStyle(color: Color(0xFF00B4D8), fontSize: 16, fontWeight: FontWeight.bold),
+                      Column(
+                        children: [
+                          const Text('Cardmarket (Media)', style: TextStyle(color: Colors.white54, fontSize: 11)),
+                          const SizedBox(height: 4),
+                          Text(
+                            card.cardmarketPrices?.averageSellPrice != null
+                                ? '${card.cardmarketPrices!.averageSellPrice!.toStringAsFixed(2)} €'
+                                : (card.cardmarketPrices?.trendPrice != null
+                                    ? '${card.cardmarketPrices!.trendPrice!.toStringAsFixed(2)} €'
+                                    : 'No disponible'),
+                            style: const TextStyle(color: Color(0xFF00B4D8), fontSize: 16, fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                      Container(width: 1, height: 35, color: Colors.white12),
+                      Column(
+                        children: [
+                          const Text('PSA 10 (Estimado)', style: TextStyle(color: Colors.white54, fontSize: 11)),
+                          const SizedBox(height: 4),
+                          Text(
+                            card.psa10Price != null ? '${card.psa10Price!.toStringAsFixed(2)} €' : 'No disponible',
+                            style: const TextStyle(color: Color(0xFFFFD166), fontSize: 16, fontWeight: FontWeight.bold),
+                          ),
+                        ],
                       ),
                     ],
                   ),
-                  Container(width: 1, height: 35, color: Colors.white12),
-                  Column(
-                    children: [
-                      const Text('PSA 10 (Estimado)', style: TextStyle(color: Colors.white54, fontSize: 11)),
-                      const SizedBox(height: 4),
-                      Text(
-                        card.psa10Price != null ? '${card.psa10Price!.toStringAsFixed(2)} €' : 'No disponible',
-                        style: const TextStyle(color: Color(0xFFFFD166), fontSize: 16, fontWeight: FontWeight.bold),
-                      ),
-                    ],
-                  ),
+                  if (card.purchasePrice != null || card.condition != null) ...[
+                    const Divider(color: Colors.white12, height: 16),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceAround,
+                      children: [
+                        if (card.condition != null)
+                          Row(
+                            children: [
+                              const Text('Estado: ', style: TextStyle(color: Colors.white54, fontSize: 11)),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: Color(card.condition!.colorHex).withValues(alpha: 0.2),
+                                  borderRadius: BorderRadius.circular(4),
+                                  border: Border.all(color: Color(card.condition!.colorHex), width: 0.8),
+                                ),
+                                child: Text(
+                                  card.condition == CardCondition.graded && card.gradingScore != null && card.gradingScore!.isNotEmpty
+                                      ? 'Graded ${card.gradingScore}'
+                                      : card.condition!.label,
+                                  style: TextStyle(
+                                    color: Color(card.condition!.colorHex),
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        if (card.purchasePrice != null)
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              Text(
+                                'Coste: ${card.purchasePrice!.toStringAsFixed(2)} €',
+                                style: const TextStyle(color: Colors.white70, fontSize: 11),
+                              ),
+                              if (card.cardmarketPrices?.averageSellPrice != null || card.cardmarketPrices?.trendPrice != null) ...[
+                                Builder(builder: (_) {
+                                  final current = card.cardmarketPrices?.averageSellPrice ?? card.cardmarketPrices?.trendPrice ?? 0.0;
+                                  final diff = current - card.purchasePrice!;
+                                  final pct = card.purchasePrice! > 0 ? (diff / card.purchasePrice! * 100) : 0.0;
+                                  final isGain = diff >= 0;
+                                  return Text(
+                                    '${isGain ? '+' : ''}${diff.toStringAsFixed(2)} € (${pct.toStringAsFixed(1)}%)',
+                                    style: TextStyle(
+                                      color: isGain ? const Color(0xFF4CAF50) : const Color(0xFFE57373),
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  );
+                                }),
+                              ],
+                            ],
+                          ),
+                      ],
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -501,6 +563,16 @@ class _AlbumViewState extends State<AlbumView> {
           c.cardmarketPrices?.trendPrice ??
           0.0;
       total += price;
+    }
+    return total;
+  }
+
+  double get _totalCostBasis {
+    double total = 0.0;
+    for (final c in _filteredCards) {
+      if (c.purchasePrice != null) {
+        total += c.purchasePrice!;
+      }
     }
     return total;
   }
@@ -708,23 +780,53 @@ class _AlbumViewState extends State<AlbumView> {
 
   Widget _buildSummaryBar(int count) {
     final value = _totalEstimatedValue;
+    final cost = _totalCostBasis;
+    final hasCost = cost > 0;
+    final diff = value - cost;
+    final pct = cost > 0 ? (diff / cost * 100) : 0.0;
+    final isGain = diff >= 0;
+
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-      color: const Color(0xFF0F3460).withValues(alpha: 0.5),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      color: const Color(0xFF0F3460).withValues(alpha: 0.6),
+      child: Column(
         children: [
-          Text(
-            _filterGame == TcgGame.all
-                ? 'Total: $count cartas'
-                : '${_filterGame.icon} ${_filterGame.label}: $count cartas',
-            style: const TextStyle(color: Colors.white70, fontSize: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                _filterGame == TcgGame.all
+                    ? '$count cartas'
+                    : '${_filterGame.icon} ${_filterGame.label}: $count cartas',
+                style: const TextStyle(color: Colors.white70, fontSize: 12),
+              ),
+              if (value > 0)
+                Text(
+                  'Valor: ${value.toStringAsFixed(2)} €',
+                  style: const TextStyle(color: Color(0xFF00B4D8), fontSize: 13, fontWeight: FontWeight.bold),
+                ),
+            ],
           ),
-          if (value > 0)
-            Text(
-              'Valor aprox: ${value.toStringAsFixed(2)} €',
-              style: const TextStyle(color: Color(0xFF00B4D8), fontSize: 12, fontWeight: FontWeight.bold),
+          if (hasCost) ...[
+            const SizedBox(height: 4),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  'Coste: ${cost.toStringAsFixed(2)} €',
+                  style: const TextStyle(color: Colors.white54, fontSize: 11),
+                ),
+                Text(
+                  '${isGain ? '+' : ''}${diff.toStringAsFixed(2)} € (${pct.toStringAsFixed(1)}%)',
+                  style: TextStyle(
+                    color: isGain ? const Color(0xFF4CAF50) : const Color(0xFFE57373),
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
             ),
+          ],
         ],
       ),
     );
@@ -888,6 +990,29 @@ class _CardTile extends StatelessWidget {
                     ),
                   ),
                 ),
+
+                if (card.condition != null)
+                  Positioned(
+                    bottom: 6,
+                    right: 6,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Color(card.condition!.colorHex).withValues(alpha: 0.85),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        card.condition == CardCondition.graded && card.gradingScore != null && card.gradingScore!.isNotEmpty
+                            ? card.gradingScore!
+                            : card.condition!.shortCode,
+                        style: const TextStyle(
+                          color: Colors.black,
+                          fontSize: 8.5,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),

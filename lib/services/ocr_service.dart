@@ -388,6 +388,32 @@ class OcrService {
       (m) => '${m.group(1)}${m.group(2)}',
     );
 
+    // 0. Fracción con prefijo alfabético en el número y/o total
+    // (ej: "TG14/TG30", "TG14/30", "GG54/GG70", "GG54/70", "SV102/SV198", "SWSH025/SWSH100")
+    final matchAlphaFrac = RegExp(
+      r'\b([A-Za-z]{1,6})(\d{1,4})\s*/\s*(?:[A-Za-z]{1,6})?(\d{1,4})\b',
+    ).firstMatch(normalized);
+    if (matchAlphaFrac != null) {
+      final prefix = matchAlphaFrac.group(1)!;
+      final numPart = matchAlphaFrac.group(2)!;
+      final totalPart = matchAlphaFrac.group(3)!;
+      final upperPrefix = prefix.toUpperCase();
+      if (!['NO', 'NUM', 'REF', 'CARD', 'PAGE', 'HP', 'PS', 'ITEM'].contains(upperPrefix)) {
+        return '$upperPrefix$numPart/$totalPart';
+      }
+    }
+
+    // 0.1 Número promo con prefijo alfabético sin barra (ej: "SWSH234", "SV102", "SVP001", "SM210")
+    final matchPromoCode = RegExp(
+      r'\b(SWSH|SVP|SV|SM|XY|BW|DP|HGSS|TG|GG)\s*(\d{1,4})\b',
+      caseSensitive: false,
+    ).firstMatch(normalized);
+    if (matchPromoCode != null) {
+      final prefix = matchPromoCode.group(1)!.toUpperCase();
+      final numPart = matchPromoCode.group(2)!;
+      return '$prefix$numPart';
+    }
+
     // 1. Formato Set + Fracción (ej: "s8a 012/028", "[s8a] 012/028", "s8a-012/028", "SV4a 025/190", "MEW 025/165")
     final matchSetAndFrac = RegExp(
       r'(?:\[|\b)([A-Za-z0-9]{2,6})(?:\]|\b)?\s*[-–_]?\s*(\d{1,4}/\d{1,4})\b',
@@ -505,6 +531,10 @@ class OcrService {
       RegExp(r'([\p{L}\-]{2,})(vmax|vstar|ex|gx|break|v)$', caseSensitive: false, unicode: true),
       (m) => '${m.group(1)} ${m.group(2)!.toUpperCase()}',
     );
+
+    // Eliminar enteros sueltos de 2 o 3 dígitos al final del título (ej: HP "210" en "Blaziken V 210")
+    // sin romper nombres con dígitos pegados como "Porygon2" ni cartas como "Rotom V"
+    trimmed = trimmed.replaceAll(RegExp(r'\s+\d{2,3}$'), '').trim();
 
     if (trimmed.length < 2) return null;
 

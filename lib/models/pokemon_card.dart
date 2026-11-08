@@ -117,6 +117,34 @@ class TcgAlbum {
   }
 }
 
+/// Estado o condición física de una carta coleccionable.
+enum CardCondition {
+  nm('Near Mint', 'NM', 0xFF4CAF50),
+  lp('Lightly Played', 'LP', 0xFF8BC34A),
+  mp('Moderately Played', 'MP', 0xFFFFC107),
+  hp('Heavily Played', 'HP', 0xFFFF9800),
+  graded('Graduada', 'Graded', 0xFF9C27B0);
+
+  final String label;
+  final String shortCode;
+  final int colorHex;
+
+  const CardCondition(this.label, this.shortCode, this.colorHex);
+
+  static CardCondition? fromString(String? val) {
+    if (val == null || val.isEmpty) return null;
+    final lower = val.toLowerCase().trim();
+    for (final c in CardCondition.values) {
+      if (c.name == lower ||
+          c.shortCode.toLowerCase() == lower ||
+          c.label.toLowerCase() == lower) {
+        return c;
+      }
+    }
+    return null;
+  }
+}
+
 /// Modelo universal para cartas de cualquier TCG en el álbum.
 class PokemonCard {
   final String id;
@@ -130,6 +158,10 @@ class PokemonCard {
   final int? setPrintedTotal;
   final int? setTotal;
   final String? language;
+  final double? purchasePrice;
+  final DateTime? purchaseDate;
+  final CardCondition? condition;
+  final String? gradingScore;
 
   const PokemonCard({
     required this.id,
@@ -143,6 +175,10 @@ class PokemonCard {
     this.setPrintedTotal,
     this.setTotal,
     this.language,
+    this.purchasePrice,
+    this.purchaseDate,
+    this.condition,
+    this.gradingScore,
   });
 
   // ──────────────────────────────────────────────────────────────
@@ -386,9 +422,17 @@ class PokemonCard {
     int? setPrintedTotal,
     int? setTotal,
     String? language,
+    double? purchasePrice,
+    DateTime? purchaseDate,
+    CardCondition? condition,
+    String? gradingScore,
     bool clearPsa10Price = false,
     bool clearCardmarketPrices = false,
     bool clearLanguage = false,
+    bool clearPurchasePrice = false,
+    bool clearPurchaseDate = false,
+    bool clearCondition = false,
+    bool clearGradingScore = false,
   }) {
     return PokemonCard(
       id: id ?? this.id,
@@ -402,6 +446,10 @@ class PokemonCard {
       setPrintedTotal: setPrintedTotal ?? this.setPrintedTotal,
       setTotal: setTotal ?? this.setTotal,
       language: clearLanguage ? null : (language ?? this.language),
+      purchasePrice: clearPurchasePrice ? null : (purchasePrice ?? this.purchasePrice),
+      purchaseDate: clearPurchaseDate ? null : (purchaseDate ?? this.purchaseDate),
+      condition: clearCondition ? null : (condition ?? this.condition),
+      gradingScore: clearGradingScore ? null : (gradingScore ?? this.gradingScore),
     );
   }
 
@@ -412,6 +460,10 @@ class PokemonCard {
     int? setTotal,
     String? language,
     TcgGame? game,
+    double? purchasePrice,
+    DateTime? purchaseDate,
+    CardCondition? condition,
+    String? gradingScore,
   }) {
     return copyWith(
       setName: setName,
@@ -420,6 +472,10 @@ class PokemonCard {
       setTotal: setTotal,
       language: language,
       game: game,
+      purchasePrice: purchasePrice,
+      purchaseDate: purchaseDate,
+      condition: condition,
+      gradingScore: gradingScore,
     );
   }
 
@@ -438,6 +494,10 @@ class PokemonCard {
         'setPrintedTotal': setPrintedTotal,
         'setTotal': setTotal,
         'language': language,
+        'purchasePrice': purchasePrice,
+        'purchaseDate': purchaseDate?.toIso8601String(),
+        'condition': condition?.name,
+        'gradingScore': gradingScore,
       };
 
   factory PokemonCard.fromJson(Map<String, dynamic> json) =>
@@ -459,6 +519,12 @@ class PokemonCard {
       setPrintedTotal: (json['setPrintedTotal'] as num?)?.toInt(),
       setTotal: (json['setTotal'] as num?)?.toInt(),
       language: json['language'] as String?,
+      purchasePrice: (json['purchasePrice'] as num?)?.toDouble(),
+      purchaseDate: json['purchaseDate'] != null
+          ? DateTime.tryParse(json['purchaseDate'] as String)
+          : null,
+      condition: CardCondition.fromString(json['condition'] as String?),
+      gradingScore: json['gradingScore'] as String?,
     );
   }
 

@@ -50,15 +50,16 @@ class TcgApiService {
     if (game == TcgGame.pokemon || game == TcgGame.all) {
       if (number != null && number.isNotEmpty) {
         final parts = number.split('/');
-        final rawNumber = parts[0].replaceAll(RegExp(r'[^\d]'), '').trim();
+        final rawNumber = parts[0].trim();
         final totalInSet = parts.length > 1
             ? int.tryParse(parts[1].replaceAll(RegExp(r'[^\d]'), '').trim())
             : null;
 
-        final setMatch = RegExp(r'(?:^|\b)([A-Za-z0-9]{2,6})\s*[-–_\s]\s*(\d{1,4})(?:/\d{1,4})?')
+        // Extraer set y número permitiendo prefijos directos como "TG14", "GG54", "s8a-013" o "s8a 013"
+        final setMatch = RegExp(r'(?:^|\b)([A-Za-z0-9]{2,6})\s*[-–_\s]?\s*(\d{1,4})(?:/\d{1,4})?')
             .firstMatch(number.trim());
         final setCode = setMatch?.group(1);
-        final cardNum = setMatch?.group(2) ?? rawNumber;
+        final cardNum = setMatch != null ? '${setMatch.group(1)}${setMatch.group(2)}' : rawNumber;
 
         final localCard = await LocalCatalogService.instance.findCard(
           cardName: cleanQuery.isNotEmpty ? cleanQuery : null,
@@ -130,14 +131,33 @@ class TcgApiService {
     try {
       List<PokemonCard> results = [];
 
-      if (query.isNotEmpty && number != null) {
-        results = await searchByNameAndNumber(query, number, language: language);
-        if (results.isEmpty) {
-          results = await searchByCollectionNumber(number, language: language);
-        }
-      } else if (number != null && number.isNotEmpty) {
+      // 1. PRIORIDAD MÁXIMA: Si hay número de colección (ej: "TG14/TG30", "012/028"), buscar primero por número/set
+      if (number != null && number.isNotEmpty) {
         results = await searchByCollectionNumber(number, language: language);
-      } else if (query.isNotEmpty) {
+        if (results.isNotEmpty) {
+          // Si además hay un nombre detectado, ordenar/filtrar priorizando las que coincidan con el nombre
+          final coreQuery = _extractCoreName(query).toLowerCase();
+          if (coreQuery.isNotEmpty) {
+            final matches = results.where((c) =>
+                c.name.toLowerCase().contains(coreQuery) ||
+                coreQuery.contains(c.name.toLowerCase())).toList();
+            if (matches.isNotEmpty) {
+              final rest = results.where((c) => !matches.contains(c)).toList();
+              return [...matches, ...rest];
+            }
+          }
+          return results;
+        }
+
+        // Si la búsqueda por número directo no arrojó resultados y hay nombre, probar nombre + número
+        if (query.isNotEmpty) {
+          results = await searchByNameAndNumber(query, number, language: language);
+          if (results.isNotEmpty) return results;
+        }
+      }
+
+      // 2. Solo si no hay número o no devolvió resultados, buscar por nombre
+      if (query.isNotEmpty) {
         results = await searchByName(query, language: language);
       }
 
@@ -258,20 +278,26 @@ class TcgApiService {
   }) async {
     final langCode = language.apiCode == 'auto' ? 'en' : language.apiCode;
 
-    // 0. Comprobar si el identificador incluye el código de set explícito
-    // Ejemplos: "s8a 012/028", "s8a-012", "SV4a 025/190", "MEW 025/165", "s8a 012"
-    final setWithNumberMatch = RegExp(r'(?:^|\b)([A-Za-z0-9]{2,6})\s*[-–_\s]\s*(\d{1,4})(?:/\d{1,4})?')
+    // 0. Comprobar si el identificador incluye el código de set explícito o prefijo alfabético
+    // Ejemplos: "TG14/TG30", "TG14", "GG54/GG70", "s8a 012/028", "s8a-012", "SV4a 025/190"
+    final setWithNumberMatch = RegExp(r'(?:^|\b)([A-Za-z0-9]{2,6})\s*[-–_\s]?\s*(\d{1,4})(?:/\d{1,4})?')
         .firstMatch(collectionNumber.trim());
 
     if (setWithNumberMatch != null) {
-      final setId = setWithNumberMatch.group(1)!.toLowerCase();
+      final setCode = setWithNumberMatch.group(1)!;
+      final setId = setCode.toLowerCase();
       final rawNum = setWithNumberMatch.group(2)!;
       final intNum = int.tryParse(rawNum);
 
-      final candidateNums = <String>{rawNum};
+      final candidateNums = <String>{
+        '$setCode$rawNum',
+        '${setCode.toUpperCase()}$rawNum',
+        rawNum,
+      };
       if (intNum != null) {
         candidateNums.add(intNum.toString());
         candidateNums.add(intNum.toString().padLeft(3, '0'));
+        candidateNums.add('${setCode.toUpperCase()}${intNum.toString().padLeft(2, '0')}');
       }
 
       // Intentar primero en el idioma detectado/solicitado, luego en japonés, inglés y español
@@ -287,17 +313,21 @@ class TcgApiService {
       }
     }
 
-    // 1. Extraer el número sin prefijos y el total del set (ej: "012/028" -> rawNumber="012", totalInSet=28)
+    // 1. Extraer número con y sin prefijo alfabético y total del set
     final parts = collectionNumber.split('/');
-    final rawNumber = parts[0].replaceAll(RegExp(r'[^\d]'), '').trim();
-    final intNumber = int.tryParse(rawNumber);
+    final rawFull = parts[0].trim();
+    final rawDigits = rawFull.replaceAll(RegExp(r'[^\d]'), '').trim();
+    final intNumber = int.tryParse(rawDigits);
     final totalInSet = parts.length > 1
         ? int.tryParse(parts[1].replaceAll(RegExp(r'[^\d]'), '').trim())
         : null;
 
-    if (rawNumber.isEmpty) return [];
+    if (rawFull.isEmpty) return [];
 
-    final candidateNumbers = <String>{rawNumber};
+    final candidateNumbers = <String>{rawFull};
+    if (rawDigits.isNotEmpty) {
+      candidateNumbers.add(rawDigits);
+    }
     if (intNumber != null) {
       candidateNumbers.add(intNumber.toString());
       candidateNumbers.add(intNumber.toString().padLeft(3, '0'));
@@ -703,15 +733,20 @@ class TcgApiService {
 
     name = name.replaceAll(RegExp(r'(たね|1進化|2進化|기본|1진화|2진화|基础|1阶进化|2阶进化)'), ' ');
 
-    name = name.replaceAll(
-      RegExp(r'(vmax|vstar|ex|gx|break|v)$', caseSensitive: false),
-      '',
-    );
-    name = name.replaceAll(
-      RegExp(r'\b(VMAX|VSTAR|ex|EX|GX|BREAK|Prime|STAR|\bV\b)\b',
-          caseSensitive: false),
-      ' ',
-    );
+    // Solo recortar sufijos como V, EX, GX, VMAX si el texto contiene caracteres asiáticos (CJK/Kana/Hangul)
+    // En texto latino se deben conservar porque son parte fundamental del nombre (ej: "Blaziken V", "Lugia VSTAR")
+    final hasAsianChars = RegExp(r'[\u3040-\u30FF\uAC00-\uD7AF\u4E00-\u9FFF]').hasMatch(name);
+    if (hasAsianChars) {
+      name = name.replaceAll(
+        RegExp(r'(vmax|vstar|ex|gx|break|v)$', caseSensitive: false),
+        '',
+      );
+      name = name.replaceAll(
+        RegExp(r'\b(VMAX|VSTAR|ex|EX|GX|BREAK|Prime|STAR|\bV\b)\b',
+            caseSensitive: false),
+        ' ',
+      );
+    }
 
     name = name.replaceAll(RegExp(r'\b\d+\b'), ' ');
     name = name.replaceAll(RegExp(r'\s+'), ' ').trim();

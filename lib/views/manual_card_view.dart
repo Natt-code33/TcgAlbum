@@ -48,10 +48,14 @@ class _ManualCardViewState extends State<ManualCardView> {
   late final TextEditingController _cmPriceController;
   late final TextEditingController _psa10PriceController;
   late final TextEditingController _imageUrlController;
+  late final TextEditingController _purchasePriceController;
+  late final TextEditingController _gradingScoreController;
 
   File? _imageFile;
   TcgGame _selectedGame = TcgGame.pokemon;
   CardLanguage _selectedLanguage = CardLanguage.es;
+  CardCondition? _selectedCondition;
+  DateTime? _purchaseDate;
   bool _isSaving = false;
 
   @override
@@ -85,6 +89,14 @@ class _ManualCardViewState extends State<ManualCardView> {
           ? edit.imageUrl
           : '',
     );
+    _purchasePriceController = TextEditingController(
+      text: edit?.purchasePrice != null ? edit!.purchasePrice!.toStringAsFixed(2) : '',
+    );
+    _gradingScoreController = TextEditingController(
+      text: edit?.gradingScore ?? '',
+    );
+    _selectedCondition = edit?.condition;
+    _purchaseDate = edit?.purchaseDate;
 
     if (edit != null &&
         !edit.imageUrl.startsWith('http') &&
@@ -124,6 +136,8 @@ class _ManualCardViewState extends State<ManualCardView> {
     _cmPriceController.dispose();
     _psa10PriceController.dispose();
     _imageUrlController.dispose();
+    _purchasePriceController.dispose();
+    _gradingScoreController.dispose();
     super.dispose();
   }
 
@@ -161,6 +175,10 @@ class _ManualCardViewState extends State<ManualCardView> {
     final psaPrice = double.tryParse(
       _psa10PriceController.text.trim().replaceAll(',', '.'),
     );
+    final purchasePrice = double.tryParse(
+      _purchasePriceController.text.trim().replaceAll(',', '.'),
+    );
+    final gradingScore = _gradingScoreController.text.trim();
 
     String finalImageUrl = '';
     if (_imageFile != null) {
@@ -209,6 +227,13 @@ class _ManualCardViewState extends State<ManualCardView> {
         setPrintedTotal: setTotal ?? widget.cardToEdit!.setPrintedTotal,
         setTotal: setTotal ?? widget.cardToEdit!.setTotal,
         language: _selectedLanguage.apiCode,
+        purchasePrice: purchasePrice,
+        purchaseDate: _purchaseDate,
+        condition: _selectedCondition,
+        gradingScore: gradingScore.isNotEmpty ? gradingScore : null,
+        clearPurchasePrice: purchasePrice == null,
+        clearCondition: _selectedCondition == null,
+        clearGradingScore: gradingScore.isEmpty,
       );
 
       await _storage.updateCard(updated);
@@ -245,6 +270,10 @@ class _ManualCardViewState extends State<ManualCardView> {
       setPrintedTotal: setTotal,
       setTotal: setTotal,
       language: _selectedLanguage.apiCode,
+      purchasePrice: purchasePrice,
+      purchaseDate: _purchaseDate,
+      condition: _selectedCondition,
+      gradingScore: gradingScore.isNotEmpty ? gradingScore : null,
     );
 
     final isNew = await _storage.saveCard(card);
@@ -367,6 +396,11 @@ class _ManualCardViewState extends State<ManualCardView> {
                   ),
                 ],
               ),
+
+              const SizedBox(height: 14),
+
+              // ── Sección de Portfolio (Coste de compra y Estado) ──────────
+              _buildPortfolioSection(),
 
               const SizedBox(height: 12),
 
@@ -639,6 +673,149 @@ class _ManualCardViewState extends State<ManualCardView> {
               ),
             ),
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPortfolioSection() {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF16213E),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.greenAccent.withValues(alpha: 0.25)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.account_balance_wallet, color: Colors.greenAccent, size: 18),
+              SizedBox(width: 8),
+              Text(
+                'Datos de Portfolio / Colección (Opcional)',
+                style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: _buildTextField(
+                  controller: _purchasePriceController,
+                  label: 'Coste de compra (€)',
+                  hint: 'Ej: 12.00',
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  prefixText: '€ ',
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: InkWell(
+                  onTap: () async {
+                    final picked = await showDatePicker(
+                      context: context,
+                      initialDate: _purchaseDate ?? DateTime.now(),
+                      firstDate: DateTime(1996),
+                      lastDate: DateTime.now(),
+                      builder: (context, child) {
+                        return Theme(
+                          data: ThemeData.dark().copyWith(
+                            colorScheme: const ColorScheme.dark(
+                              primary: Colors.amber,
+                              surface: Color(0xFF16213E),
+                            ),
+                          ),
+                          child: child!,
+                        );
+                      },
+                    );
+                    if (picked != null) {
+                      setState(() => _purchaseDate = picked);
+                    }
+                  },
+                  child: Container(
+                    height: 48,
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0F3460),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          _purchaseDate != null
+                              ? '${_purchaseDate!.day}/${_purchaseDate!.month}/${_purchaseDate!.year}'
+                              : 'Fecha compra',
+                          style: TextStyle(
+                            color: _purchaseDate != null ? Colors.white : Colors.white38,
+                            fontSize: 12,
+                          ),
+                        ),
+                        const Icon(Icons.calendar_today, size: 16, color: Colors.white54),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            'Estado de la carta:',
+            style: TextStyle(color: Colors.white70, fontSize: 12),
+          ),
+          const SizedBox(height: 6),
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                ...CardCondition.values.map((cond) {
+                  final isSelected = _selectedCondition == cond;
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 6),
+                    child: ChoiceChip(
+                      label: Text(
+                        '${cond.shortCode} (${cond.label})',
+                        style: TextStyle(
+                          color: isSelected ? Colors.black : Colors.white70,
+                          fontSize: 11,
+                          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                        ),
+                      ),
+                      selected: isSelected,
+                      selectedColor: Color(cond.colorHex),
+                      backgroundColor: const Color(0xFF0F3460),
+                      side: BorderSide(
+                        color: isSelected ? Color(cond.colorHex) : Colors.white24,
+                      ),
+                      onSelected: (selected) {
+                        setState(() {
+                          _selectedCondition = selected ? cond : null;
+                        });
+                      },
+                    ),
+                  );
+                }),
+                if (_selectedCondition != null)
+                  TextButton(
+                    onPressed: () => setState(() => _selectedCondition = null),
+                    child: const Text('Limpiar', style: TextStyle(color: Colors.white38, fontSize: 11)),
+                  ),
+              ],
+            ),
+          ),
+          if (_selectedCondition == CardCondition.graded) ...[
+            const SizedBox(height: 10),
+            _buildTextField(
+              controller: _gradingScoreController,
+              label: 'Puntuación y Empresa de Graduación',
+              hint: 'Ej: PSA 9, BGS 9.5, CGC 10...',
+            ),
+          ],
         ],
       ),
     );
