@@ -48,6 +48,7 @@ class _ScannerViewState extends State<ScannerView> {
   String? _errorMessage;
   late TcgGame _selectedGame;
   CardLanguage _selectedLanguage = CardLanguage.auto;
+  int _searchRequestId = 0;
 
   // ── Controladores ─────────────────────────────────────────────────────────
   final TextEditingController _manualSearchController = TextEditingController();
@@ -76,6 +77,7 @@ class _ScannerViewState extends State<ScannerView> {
       );
 
       if (photo == null) return;
+      if (!mounted) return;
 
       final imageFile = File(photo.path);
       setState(() {
@@ -103,6 +105,8 @@ class _ScannerViewState extends State<ScannerView> {
         imageFile,
         language: _selectedLanguage,
       );
+
+      if (!mounted) return;
 
       setState(() {
         _ocrResult = result;
@@ -141,13 +145,15 @@ class _ScannerViewState extends State<ScannerView> {
   }
 
   // ──────────────────────────────────────────────────────────────────────────
-  // PASO 3: Consulta a las APIs TCG (Pokémon, Magic, YGO, Digimon, etc.)
+  // PASO 3: Consulta a las APIs TCG con protección contra carreras y mounted.
   // ──────────────────────────────────────────────────────────────────────────
   Future<void> _searchApi({
     String? pokemonName,
     String? collectionNumber,
     String? manualQuery,
   }) async {
+    final int currentRequestId = ++_searchRequestId;
+
     setState(() {
       _isProcessing = true;
       _errorMessage = null;
@@ -180,6 +186,8 @@ class _ScannerViewState extends State<ScannerView> {
         language: effectiveLang,
       );
 
+      if (!mounted || currentRequestId != _searchRequestId) return;
+
       if (results.isEmpty) {
         setState(() {
           _isProcessing = false;
@@ -199,9 +207,12 @@ class _ScannerViewState extends State<ScannerView> {
             autoSelected.id,
             lang: autoSelected.language ?? _selectedLanguage.apiCode,
           );
+          if (!mounted || currentRequestId != _searchRequestId) return;
           if (detail != null) autoSelected = detail;
         }
       }
+
+      if (!mounted || currentRequestId != _searchRequestId) return;
 
       setState(() {
         _searchResults = results;
@@ -318,22 +329,32 @@ class _ScannerViewState extends State<ScannerView> {
   }
 
   // ──────────────────────────────────────────────────────────────────────────
-  // PASO 6: Guardar carta en el álbum local.
+  // PASO 6: Guardar carta en el álbum local con feedback de duplicados.
   // ──────────────────────────────────────────────────────────────────────────
   Future<void> _saveCard() async {
     if (_selectedCard == null) return;
 
     setState(() => _isProcessing = true);
-    await _storage.saveCard(_selectedCard!);
+    final isNew = await _storage.saveCard(_selectedCard!);
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('¡"${_selectedCard!.name}" guardada en tu álbum!'),
-          backgroundColor: Colors.green,
-          duration: const Duration(seconds: 2),
-        ),
-      );
+      if (isNew) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('¡"${_selectedCard!.name}" guardada en tu álbum!'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('"${_selectedCard!.name}" ya estaba guardada en tu álbum.'),
+            backgroundColor: Colors.amber.shade800,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
       Navigator.of(context).pop();
     }
   }

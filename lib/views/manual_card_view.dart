@@ -166,7 +166,18 @@ class _ManualCardViewState extends State<ManualCardView> {
     if (_imageFile != null) {
       finalImageUrl = _imageFile!.path;
     } else if (_imageUrlController.text.trim().isNotEmpty) {
-      finalImageUrl = _imageUrlController.text.trim();
+      final inputUrl = _imageUrlController.text.trim();
+      if (!inputUrl.startsWith('https://') && !inputUrl.startsWith('http://')) {
+        setState(() => _isSaving = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('La URL de la imagen debe comenzar por https://'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+        return;
+      }
+      finalImageUrl = inputUrl;
     } else if (widget.cardToEdit != null) {
       finalImageUrl = widget.cardToEdit!.imageUrl;
     }
@@ -236,17 +247,27 @@ class _ManualCardViewState extends State<ManualCardView> {
       language: _selectedLanguage.apiCode,
     );
 
-    await _storage.saveCard(card);
+    final isNew = await _storage.saveCard(card);
 
     if (mounted) {
       setState(() => _isSaving = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('¡"${card.name}" guardada en tu álbum!'),
-          backgroundColor: Colors.green,
-          duration: const Duration(seconds: 2),
-        ),
-      );
+      if (isNew) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('¡"${card.name}" guardada en tu álbum!'),
+            backgroundColor: Colors.green,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('"${card.name}" ya estaba guardada en tu álbum.'),
+            backgroundColor: Colors.amber.shade800,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
       Navigator.of(context).pop(true);
     }
   }

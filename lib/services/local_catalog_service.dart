@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:developer' as developer;
 import 'dart:io';
 import 'package:flutter/services.dart';
@@ -14,12 +15,18 @@ class LocalCatalogService {
 
   Database? _db;
   bool _isInitialized = false;
+  Completer<void>? _initCompleter;
 
   /// Inicializa la base de datos local SQLite copiándola desde assets al almacenamiento interno
-  /// si no existe o si ha sido actualizada.
+  /// si no existe o si ha sido actualizada. Seguro contra concurrencia.
   Future<void> init() async {
     if (_isInitialized && _db != null && _db!.isOpen) return;
 
+    if (_initCompleter != null) {
+      return _initCompleter!.future;
+    }
+
+    _initCompleter = Completer<void>();
     try {
       final databasesPath = await getDatabasesPath();
       final path = join(databasesPath, 'tcg_catalog.db');
@@ -40,8 +47,12 @@ class LocalCatalogService {
       _db = await openDatabase(path, readOnly: false);
       _isInitialized = true;
       developer.log('Base de datos SQLite local conectada con éxito.', name: 'LocalCatalogService');
+      _initCompleter!.complete();
     } catch (e) {
       developer.log('Error inicializando catálogo local: $e', name: 'LocalCatalogService');
+      _initCompleter!.completeError(e);
+    } finally {
+      _initCompleter = null;
     }
   }
 
@@ -167,34 +178,20 @@ class LocalCatalogService {
     return rows.map((r) => _mapRowToCard(r, language)).toList();
   }
 
-  /// Guarda una carta obtenida remotamente en el catálogo local para búsquedas futuras offline.
-  Future<void> cacheCard(PokemonCard card) async {
+  /// Retorna los IDs de las colecciones que tienen exactamente la cantidad de cartas indicada.
+  Future<List<String>> findSetIdsByOfficialCount(int officialCount) async {
     if (!_isInitialized || _db == null) await init();
-    if (_db == null) return;
+    if (_db == null) return [];
 
     try {
-      final parts = card.id.split('-');
-      final setId = parts.length > 1 ? parts.first.toLowerCase() : '';
-      final rawNum = card.number.replaceAll(RegExp(r'[^\d]'), '').trim();
-      final intNum = int.tryParse(rawNum);
-
-      await _db!.insert(
-        'cards',
-        {
-          'id': card.id.toLowerCase(),
-          'set_id': setId,
-          'local_id': card.number,
-          'number_int': intNum,
-          'total_in_set': card.setPrintedTotal,
-          'name_ja': card.language == 'ja' ? card.name : null,
-          'name_en': card.language == 'en' ? card.name : null,
-          'name_es': card.language == 'es' ? card.name : null,
-          'image_url': card.imageUrl,
-          'game': card.game.name,
-        },
-        conflictAlgorithm: ConflictAlgorithm.ignore,
+      final rows = await _db!.rawQuery(
+        'SELECT id FROM sets WHERE official_count = ? OR total_count = ? LIMIT 5',
+        [officialCount, officialCount],
       );
-    } catch (_) {}
+      return rows.map((r) => r['id'] as String).toList();
+    } catch (_) {
+      return [];
+    }
   }
 
   PokemonCard _mapRowToCard(Map<String, dynamic> row, CardLanguage language) {

@@ -386,6 +386,9 @@ class PokemonCard {
     int? setPrintedTotal,
     int? setTotal,
     String? language,
+    bool clearPsa10Price = false,
+    bool clearCardmarketPrices = false,
+    bool clearLanguage = false,
   }) {
     return PokemonCard(
       id: id ?? this.id,
@@ -394,11 +397,11 @@ class PokemonCard {
       setName: setName ?? this.setName,
       imageUrl: imageUrl ?? this.imageUrl,
       game: game ?? this.game,
-      cardmarketPrices: cardmarketPrices ?? this.cardmarketPrices,
-      psa10Price: psa10Price ?? this.psa10Price,
+      cardmarketPrices: clearCardmarketPrices ? null : (cardmarketPrices ?? this.cardmarketPrices),
+      psa10Price: clearPsa10Price ? null : (psa10Price ?? this.psa10Price),
       setPrintedTotal: setPrintedTotal ?? this.setPrintedTotal,
       setTotal: setTotal ?? this.setTotal,
-      language: language ?? this.language,
+      language: clearLanguage ? null : (language ?? this.language),
     );
   }
 
@@ -436,6 +439,9 @@ class PokemonCard {
         'setTotal': setTotal,
         'language': language,
       };
+
+  factory PokemonCard.fromJson(Map<String, dynamic> json) =>
+      PokemonCard.fromLocalJson(json);
 
   factory PokemonCard.fromLocalJson(Map<String, dynamic> json) {
     final pricesData = json['cardmarketPrices'] as Map<String, dynamic>?;

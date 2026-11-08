@@ -130,19 +130,38 @@ class OcrService {
     }
 
     // En modo Auto:
-    // Si tenemos nombre latino válido Y número, y NO hay caracteres asiáticos obvios en el texto general:
+    // Si tenemos nombre latino válido o indicios claros occidentales sin caracteres asiáticos, retornar de inmediato
     final hasAsianChars = RegExp(r'[\u3040-\u30FF\uAC00-\uD7AF\u4E00-\u9FFF]').hasMatch(latinResult.rawText);
-    if (hasValidLatinName && latinResult.collectionNumber != null && !hasAsianChars) {
+    final hasWesternKeywords = RegExp(r'\b(PS|HP|daño|básico|fase|stage|basic|damage|card|retreat)\b', caseSensitive: false).hasMatch(latinResult.rawText);
+
+    if ((hasValidLatinName && latinResult.collectionNumber != null && !hasAsianChars) ||
+        (hasValidLatinName && hasWesternKeywords && !hasAsianChars)) {
       return latinResult;
     }
 
-    // 3. En modo Auto, si no hay nombre latino válido o la carta contiene texto asiático:
-    // Probar scripts asiáticos (japonés, coreano, chino)
-    final asianScripts = [
-      (TextRecognitionScript.japanese, CardLanguage.ja),
-      (TextRecognitionScript.korean, CardLanguage.ko),
-      (TextRecognitionScript.chinese, CardLanguage.zh),
-    ];
+    // Si tampoco hay indicios asiáticos (ni caracteres CJK ni códigos de set como s8a, s12a, sv...),
+    // evitar las pasadas pesadas de japonés, coreano y chino
+    final hasAsianContext = hasAsianChars ||
+        RegExp(r'\b(s\d+[a-z]?|sv\d+[a-z]?)\b', caseSensitive: false).hasMatch(latinResult.rawText) ||
+        (latinResult.collectionNumber != null && RegExp(r'\b(s\d+[a-z]?|sv\d+[a-z]?)\b', caseSensitive: false).hasMatch(latinResult.collectionNumber!));
+
+    if (!hasAsianContext && (hasValidLatinName || latinResult.collectionNumber != null)) {
+      return latinResult;
+    }
+
+    // 3. En modo Auto, si la carta apunta a script asiático:
+    // Seleccionar el script asiático más probable para no ejecutar los 3 secuencialmente
+    final asianScripts = <(TextRecognitionScript, CardLanguage)>[];
+    if (RegExp(r'[\u3040-\u30FF]').hasMatch(latinResult.rawText) ||
+        RegExp(r'\b(s\d+[a-z]?|sv\d+[a-z]?)\b', caseSensitive: false).hasMatch(latinResult.rawText)) {
+      asianScripts.add((TextRecognitionScript.japanese, CardLanguage.ja));
+    } else if (RegExp(r'[\uAC00-\uD7AF]').hasMatch(latinResult.rawText)) {
+      asianScripts.add((TextRecognitionScript.korean, CardLanguage.ko));
+    } else {
+      asianScripts.add((TextRecognitionScript.japanese, CardLanguage.ja));
+      asianScripts.add((TextRecognitionScript.chinese, CardLanguage.zh));
+      asianScripts.add((TextRecognitionScript.korean, CardLanguage.ko));
+    }
 
     for (final (script, lang) in asianScripts) {
       final asianResult = await _runRecognition(inputImage, script, lang);

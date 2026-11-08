@@ -142,14 +142,15 @@ class AlbumStorageService {
     await saveAllAlbums(albums);
   }
 
-  Future<void> addCard(PokemonCard card) async {
+  Future<bool> addCard(PokemonCard card) async {
     final album = await loadAlbum();
-    if (album.any((c) => c.id == card.id)) return;
+    if (album.any((c) => c.id == card.id)) return false;
     album.add(card);
     await saveAlbum(album);
+    return true;
   }
 
-  Future<void> saveCard(PokemonCard card) => addCard(card);
+  Future<bool> saveCard(PokemonCard card) => addCard(card);
 
   Future<void> updateCard(PokemonCard updatedCard) async {
     final album = await loadAlbum();
@@ -177,11 +178,45 @@ class AlbumStorageService {
   }
 
   Future<int> importAlbumsJson(String jsonStr) async {
-    final decoded = json.decode(jsonStr) as Map<String, dynamic>;
-    final albumsRaw = decoded['albums'] as List<dynamic>? ?? [];
-    final imported = albumsRaw
-        .map((e) => TcgAlbum.fromJson(e as Map<String, dynamic>))
-        .toList();
+    final dynamic rawDecoded = json.decode(jsonStr);
+    if (rawDecoded is! Map<String, dynamic>) {
+      throw const FormatException('El formato de la copia de seguridad no es válido (debe ser un objeto JSON).');
+    }
+
+    final albumsRaw = rawDecoded['albums'];
+    if (albumsRaw is! List) {
+      throw const FormatException('La copia de seguridad no contiene una lista de álbumes válida.');
+    }
+
+    final imported = <TcgAlbum>[];
+    for (final rawAlbum in albumsRaw) {
+      if (rawAlbum is! Map<String, dynamic>) continue;
+      try {
+        final albumId = (rawAlbum['id'] as String?) ?? 'album_${DateTime.now().millisecondsSinceEpoch}';
+        final albumName = (rawAlbum['name'] as String?) ?? 'Álbum Importado';
+        final rawCards = rawAlbum['cards'];
+        final validCards = <PokemonCard>[];
+
+        if (rawCards is List) {
+          for (final rawCard in rawCards) {
+            if (rawCard is! Map<String, dynamic>) continue;
+            try {
+              validCards.add(PokemonCard.fromLocalJson(rawCard));
+            } catch (_) {
+              // Si una carta tiene un formato corrupto, ignorarla sin romper todo el álbum
+            }
+          }
+        }
+
+        imported.add(TcgAlbum(
+          id: albumId,
+          name: albumName,
+          cards: validCards,
+        ));
+      } catch (_) {
+        // Ignorar álbum corrupto sin abortar toda la importación
+      }
+    }
 
     if (imported.isEmpty) return 0;
 
@@ -192,7 +227,7 @@ class AlbumStorageService {
     for (final album in imported) {
       if (!existingIds.contains(album.id)) {
         existing.add(album);
-        count++;
+        count += album.cards.length;
       } else {
         // Merge: añadir cartas que no existan
         final idx = existing.indexWhere((a) => a.id == album.id);

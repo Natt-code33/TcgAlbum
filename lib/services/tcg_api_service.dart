@@ -70,10 +70,16 @@ class TcgApiService {
 
         if (localCard != null) {
           developer.log('⚡ Carta encontrada al instante en SQLite local: ${localCard.name} (${localCard.id})', name: 'TcgApiService');
-          // Enriquecer en segundo plano con Cardmarket prices si tenemos conexión
-          fetchCardDetail(localCard.id, lang: localCard.language ?? 'en').then((detail) {
-            // Precio obtenido en segundo plano
-          }).catchError((_) => null);
+          // Enriquecer con Cardmarket prices rápidamente sin bloquear si la red falla
+          try {
+            final detail = await fetchCardDetail(
+              localCard.id,
+              lang: localCard.language ?? (language == CardLanguage.es ? 'es' : 'en'),
+            ).timeout(const Duration(milliseconds: 1500));
+            if (detail != null) {
+              return [detail];
+            }
+          } catch (_) {}
           return [localCard];
         }
       }
@@ -299,10 +305,10 @@ class TcgApiService {
 
     // 2. Si tenemos el total del set (ej: /028), buscar directamente el set oficial que tiene esa cantidad de cartas!
     if (totalInSet != null) {
-      final setLangs = {langCode, 'ja', 'en', 'es'};
+      final setLangs = {langCode, 'es', 'en', 'ja'};
       for (final l in setLangs) {
         final setIds = await _findSetsByOfficialCount(totalInSet, lang: l);
-        for (final sId in setIds) {
+        for (final sId in setIds.take(3)) {
           for (final numCand in candidateNumbers) {
             final directCard = await _fetchCardBySetAndNumber(sId, numCand, lang: l);
             if (directCard != null) {
@@ -681,7 +687,7 @@ class TcgApiService {
     if (RegExp(r'[\uAC00-\uD7AF]').hasMatch(text)) return CardLanguage.ko;
     if (RegExp(r'[\u3040-\u30FF]').hasMatch(text)) return CardLanguage.ja;
     if (RegExp(r'[\u4E00-\u9FFF]').hasMatch(text)) return CardLanguage.zh;
-    return CardLanguage.en;
+    return CardLanguage.es;
   }
 
   String _extractCoreName(String input) {
@@ -713,24 +719,38 @@ class TcgApiService {
     return name;
   }
 
+  static final Map<String, List<Map<String, dynamic>>> _setsCache = {};
+
   Future<List<String>> _findSetsByOfficialCount(int officialCount, {String lang = 'en'}) async {
+    // 1. Consultar primero catálogo local SQLite si está disponible (<1 ms)
+    try {
+      final localSets = await LocalCatalogService.instance.findSetIdsByOfficialCount(officialCount);
+      if (localSets.isNotEmpty) {
+        return localSets;
+      }
+    } catch (_) {}
+
+    // 2. Fallback a caché en memoria de TCGdex
     final url = Uri.parse('$_tcgdexBase/$lang/sets');
     try {
-      final response = await http.get(url, headers: _headers).timeout(const Duration(seconds: 4));
-      if (response.statusCode != 200) return [];
-
-      final List<dynamic> sets = json.decode(response.body);
-      final List<String> matching = [];
-      for (final s in sets) {
-        if (s is Map<String, dynamic>) {
-          final count = s['cardCount'] as Map<String, dynamic>?;
-          if (count?['official'] == officialCount) {
-            final id = s['id'] as String?;
-            if (id != null) matching.add(id);
-          }
+      if (!_setsCache.containsKey(lang)) {
+        final response = await http.get(url, headers: _headers).timeout(const Duration(seconds: 4));
+        if (response.statusCode == 200) {
+          final List<dynamic> sets = json.decode(response.body);
+          _setsCache[lang] = sets.whereType<Map<String, dynamic>>().toList();
         }
       }
-      return matching;
+
+      final cachedSets = _setsCache[lang] ?? [];
+      final List<String> matching = [];
+      for (final s in cachedSets) {
+        final count = s['cardCount'] as Map<String, dynamic>?;
+        if (count?['official'] == officialCount) {
+          final id = s['id'] as String?;
+          if (id != null) matching.add(id);
+        }
+      }
+      return matching.take(4).toList();
     } catch (_) {
       return [];
     }
