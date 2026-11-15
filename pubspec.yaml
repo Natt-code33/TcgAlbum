@@ -30,8 +30,9 @@ dependencies:
   path: ^1.9.0
   path_provider: ^2.1.5
 
-  # ── Caché de imágenes de red ──────────────────────────────────────────────
+  # ── Caché de imágenes de red y compresión nativa WebP ─────────────────────
   cached_network_image: ^3.4.1
+  flutter_image_compress: ^2.3.0
   image: ^4.12.0
 
   # ── UI Premium, Fuentes y Animaciones ─────────────────────────────────────

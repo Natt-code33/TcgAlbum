@@ -164,6 +164,7 @@ class PokemonCard {
   final DateTime? purchaseDate;
   final CardCondition? condition;
   final String? gradingScore;
+  final int quantity;
 
   const PokemonCard({
     required this.id,
@@ -181,7 +182,31 @@ class PokemonCard {
     this.purchaseDate,
     this.condition,
     this.gradingScore,
+    this.quantity = 1,
   });
+
+  static const double _usdToEurRate = 0.92;
+
+  /// Verifica de forma segura si un string es una URL HTTP/HTTPS válida con host.
+  static bool isValidNetworkUrl(String? url) {
+    if (url == null || url.trim().isEmpty) return false;
+    final uri = Uri.tryParse(url.trim());
+    if (uri == null) return false;
+    return (uri.scheme == 'https' || uri.scheme == 'http') && uri.host.isNotEmpty;
+  }
+
+  /// Devuelve la URL de miniatura optimizada (~15 KB en lugar de ~200 KB)
+  /// para listas y cuadrículas, reduciendo un 85% el uso de RAM y red.
+  String get thumbnailImageUrl {
+    if (imageUrl.isEmpty) return '';
+    if (imageUrl.contains('assets.tcgdex.net') && imageUrl.endsWith('/high.webp')) {
+      return '${imageUrl.substring(0, imageUrl.length - 10)}/low.webp';
+    }
+    if (imageUrl.contains('images.pokemontcg.io') && imageUrl.endsWith('_hires.png')) {
+      return '${imageUrl.substring(0, imageUrl.length - 10)}.png';
+    }
+    return imageUrl;
+  }
 
   // ──────────────────────────────────────────────────────────────
   // 1. Pokémon (TCGdex)
@@ -285,7 +310,14 @@ class PokemonCard {
 
     final prices = json['prices'] as Map<String, dynamic>?;
     final eur = double.tryParse(prices?['eur']?.toString() ?? '');
+    final eurFoil = double.tryParse(prices?['eur_foil']?.toString() ?? '');
     final usd = double.tryParse(prices?['usd']?.toString() ?? '');
+    final usdInEur = usd != null
+        ? double.parse((usd * _usdToEurRate).toStringAsFixed(2))
+        : null;
+
+    final effectiveAvgEur = eur ?? usdInEur;
+    final effectiveTrendEur = eurFoil ?? eur ?? usdInEur;
 
     final printedName = json['printed_name'] as String?;
     final engName = json['name'] as String? ?? 'Carta Magic';
@@ -302,8 +334,11 @@ class PokemonCard {
       setName: json['set_name'] as String? ?? 'Magic: The Gathering',
       imageUrl: img,
       game: TcgGame.magic,
-      cardmarketPrices: (eur != null || usd != null)
-          ? CardmarketPrices(averageSellPrice: eur, trendPrice: usd)
+      cardmarketPrices: (effectiveAvgEur != null || effectiveTrendEur != null)
+          ? CardmarketPrices(
+              averageSellPrice: effectiveAvgEur,
+              trendPrice: effectiveTrendEur,
+            )
           : null,
       language: json['lang'] as String? ?? 'en',
     );
@@ -379,18 +414,22 @@ class PokemonCard {
     final cardSetId = json['card_set_id'] as String? ??
         json['card_image_id'] as String? ??
         '?';
-    final price = double.tryParse(json['market_price']?.toString() ?? '') ??
+    final uniqueImageId = json['card_image_id'] as String? ?? cardSetId;
+    final usdPrice = double.tryParse(json['market_price']?.toString() ?? '') ??
         double.tryParse(json['inventory_price']?.toString() ?? '');
+    final eurPrice = usdPrice != null
+        ? double.parse((usdPrice * _usdToEurRate).toStringAsFixed(2))
+        : null;
 
     return PokemonCard(
-      id: 'op-$cardSetId',
+      id: 'op-$uniqueImageId',
       name: json['card_name'] as String? ?? 'Carta One Piece',
       number: cardSetId,
       setName: json['set_name'] as String? ?? 'One Piece Card Game',
       imageUrl: img,
       game: TcgGame.onepiece,
       cardmarketPrices:
-          price != null ? CardmarketPrices(averageSellPrice: price) : null,
+          eurPrice != null ? CardmarketPrices(averageSellPrice: eurPrice) : null,
       language: 'en',
     );
   }
@@ -399,8 +438,12 @@ class PokemonCard {
   // 6. Disney Lorcana (Lorcana API)
   // ──────────────────────────────────────────────────────────────
   factory PokemonCard.fromLorcana(Map<String, dynamic> json) {
+    final setKey = json['Set_ID'] ?? json['Set_Num'] ?? 'lor';
+    final numKey = json['Card_Num'] ?? json['Name'] ?? '?';
+    final uniqueId = json['Unique_ID'] ?? '$setKey-$numKey';
+
     return PokemonCard(
-      id: 'lor-${json['Unique_ID'] ?? json['Name']}',
+      id: 'lor-$uniqueId',
       name: json['Name'] as String? ?? 'Carta Lorcana',
       number: json['Card_Num']?.toString() ??
           json['Unique_ID']?.toString() ??
@@ -428,6 +471,7 @@ class PokemonCard {
     DateTime? purchaseDate,
     CardCondition? condition,
     String? gradingScore,
+    int? quantity,
     bool clearPsa10Price = false,
     bool clearCardmarketPrices = false,
     bool clearLanguage = false,
@@ -452,6 +496,7 @@ class PokemonCard {
       purchaseDate: clearPurchaseDate ? null : (purchaseDate ?? this.purchaseDate),
       condition: clearCondition ? null : (condition ?? this.condition),
       gradingScore: clearGradingScore ? null : (gradingScore ?? this.gradingScore),
+      quantity: (quantity ?? this.quantity).clamp(1, 9999),
     );
   }
 
@@ -500,6 +545,7 @@ class PokemonCard {
         'purchaseDate': purchaseDate?.toIso8601String(),
         'condition': condition?.name,
         'gradingScore': gradingScore,
+        'quantity': quantity,
       };
 
   factory PokemonCard.fromJson(Map<String, dynamic> json) =>
@@ -527,6 +573,7 @@ class PokemonCard {
           : null,
       condition: CardCondition.fromString(json['condition'] as String?),
       gradingScore: json['gradingScore'] as String?,
+      quantity: ((json['quantity'] as num?)?.toInt() ?? 1).clamp(1, 9999),
     );
   }
 

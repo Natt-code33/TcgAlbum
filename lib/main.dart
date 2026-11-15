@@ -14,7 +14,7 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // Inicializar base de datos local SQLite para catálogo y búsqueda instantánea
-  LocalCatalogService.instance.init();
+  await LocalCatalogService.instance.init();
 
   runApp(const PokemonAlbumApp());
 }

@@ -52,6 +52,7 @@ class _ScannerViewState extends State<ScannerView> {
   late TcgGame _selectedGame;
   CardLanguage _selectedLanguage = CardLanguage.auto;
   int _searchRequestId = 0;
+  bool _keepCapturedImage = false;
 
   // ── Controladores ─────────────────────────────────────────────────────────
   final TextEditingController _manualSearchController = TextEditingController();
@@ -62,8 +63,20 @@ class _ScannerViewState extends State<ScannerView> {
     _selectedGame = widget.initialGame;
   }
 
+  void _deleteTempFileIfNeeded(File? file) {
+    if (file == null) return;
+    try {
+      if (file.existsSync() && !file.path.contains('card_images')) {
+        file.deleteSync();
+      }
+    } catch (_) {}
+  }
+
   @override
   void dispose() {
+    if (!_keepCapturedImage) {
+      _deleteTempFileIfNeeded(_capturedImage);
+    }
     _manualSearchController.dispose();
     super.dispose();
   }
@@ -75,13 +88,16 @@ class _ScannerViewState extends State<ScannerView> {
     try {
       final XFile? photo = await _picker.pickImage(
         source: source,
-        imageQuality: 95,
+        imageQuality: 90,
+        maxWidth: 1200,
+        maxHeight: 1600,
         preferredCameraDevice: CameraDevice.rear,
       );
 
       if (photo == null) return;
       if (!mounted) return;
 
+      final previousImage = _capturedImage;
       final imageFile = File(photo.path);
       setState(() {
         _capturedImage = imageFile;
@@ -92,6 +108,9 @@ class _ScannerViewState extends State<ScannerView> {
         _searchResults = [];
         _selectedCard = null;
       });
+      if (previousImage != null && previousImage.path != imageFile.path) {
+        _deleteTempFileIfNeeded(previousImage);
+      }
 
       await _runOcr(imageFile);
     } catch (e) {
@@ -352,8 +371,8 @@ class _ScannerViewState extends State<ScannerView> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('"${_selectedCard!.name}" ya estaba guardada en tu álbum.'),
-            backgroundColor: Colors.amber.shade800,
+            content: Text('¡Añadida otra copia de "${_selectedCard!.name}" a tu álbum!'),
+            backgroundColor: Colors.green.shade700,
             duration: const Duration(seconds: 2),
           ),
         );
@@ -363,6 +382,7 @@ class _ScannerViewState extends State<ScannerView> {
   }
 
   Future<void> _openManualEntry() async {
+    _keepCapturedImage = true;
     final saved = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
         builder: (_) => ManualCardView(
@@ -376,6 +396,8 @@ class _ScannerViewState extends State<ScannerView> {
     );
     if (saved == true && mounted) {
       Navigator.of(context).pop();
+    } else {
+      _keepCapturedImage = false;
     }
   }
 
@@ -1021,10 +1043,11 @@ class _ScannerViewState extends State<ScannerView> {
           Center(
             child: ClipRRect(
               borderRadius: BorderRadius.circular(12),
-              child: card.imageUrl.startsWith('http')
+              child: PokemonCard.isValidNetworkUrl(card.imageUrl)
                   ? CachedNetworkImage(
                       imageUrl: card.imageUrl,
                       height: 220,
+                      memCacheWidth: 700,
                       fit: BoxFit.contain,
                       placeholder: (_, __) => const SizedBox(
                         height: 220,
@@ -1039,7 +1062,7 @@ class _ScannerViewState extends State<ScannerView> {
                     )
                   : (card.imageUrl.isNotEmpty && File(card.imageUrl).existsSync()
                       ? Image.file(File(card.imageUrl),
-                          height: 220, fit: BoxFit.contain)
+                          height: 220, cacheWidth: 700, fit: BoxFit.contain)
                       : const SizedBox(
                           height: 220,
                           child: Icon(Icons.image_not_supported,
@@ -1147,11 +1170,12 @@ class _ResultCard extends StatelessWidget {
             children: [
               ClipRRect(
                 borderRadius: BorderRadius.circular(6),
-                child: card.imageUrl.startsWith('http')
+                child: PokemonCard.isValidNetworkUrl(card.imageUrl)
                     ? CachedNetworkImage(
-                        imageUrl: card.imageUrl,
+                        imageUrl: card.thumbnailImageUrl,
                         width: 48,
                         height: 68,
+                        memCacheWidth: 150,
                         fit: BoxFit.cover,
                         placeholder: (_, __) => Container(
                           width: 48,
@@ -1172,6 +1196,7 @@ class _ResultCard extends StatelessWidget {
                             File(card.imageUrl),
                             width: 48,
                             height: 68,
+                            cacheWidth: 150,
                             fit: BoxFit.cover,
                           )
                         : Container(

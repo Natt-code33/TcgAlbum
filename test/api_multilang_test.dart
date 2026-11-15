@@ -1,114 +1,176 @@
+import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:dashboard_personal/services/tcg_api_service.dart';
 import 'package:dashboard_personal/services/ocr_service.dart';
 import 'package:dashboard_personal/models/pokemon_card.dart';
 
 void main() {
-  test('Verify Pokemon search in English, Japanese, Korean, Chinese', () async {
-    final api = TcgApiService();
+  late TcgApiService api;
 
+  setUp(() {
+    final mockClient = MockClient((http.Request request) async {
+      final url = request.url.toString();
+
+      if (url.contains('api.tcgdex.net') && url.contains('cards')) {
+        final nameParam = request.url.queryParameters['name'] ?? 'Pikachu';
+        return http.Response.bytes(
+          utf8.encode(
+            json.encode([
+              {
+                'id': 'sv01-025',
+                'localId': '025',
+                'name': nameParam,
+                'image': 'https://assets.tcgdex.net/en/sv/sv01/025',
+              },
+            ]),
+          ),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      }
+
+      if (url.contains('api.pokemontcg.io/v2/cards')) {
+        return http.Response.bytes(
+          utf8.encode(
+            json.encode({
+              'data': [
+                {
+                  'id': 'base1-58',
+                  'name': 'Pikachu',
+                  'number': '58',
+                  'set': {'name': 'Base', 'printedTotal': 102, 'total': 102},
+                  'images': {'large': 'https://images.pokemontcg.io/base1/58_hires.png'},
+                  'cardmarket': {
+                    'prices': {'averageSellPrice': 2.50, 'trendPrice': 2.75},
+                  },
+                },
+              ],
+            }),
+          ),
+          200,
+          headers: {'content-type': 'application/json; charset=utf-8'},
+        );
+      }
+
+      return http.Response('[]', 200);
+    });
+
+    api = TcgApiService(client: mockClient);
+  });
+
+  test('Verify Pokemon search in English, Japanese, Korean, Chinese', () async {
     // 1. English
-    print('Testing English: Pikachu...');
     final enResults = await api.searchUniversal(
       query: 'Pikachu',
       game: TcgGame.pokemon,
       language: CardLanguage.en,
     );
-    print('  [EN] Pikachu: ${enResults.length} found. First: ${enResults.first.name}');
     expect(enResults.isNotEmpty, true);
 
     // 2. Japanese
-    print('\nTesting Japanese: ピカチュウ (Pikachu)...');
     final jaPikachu = await api.searchUniversal(
       query: 'ピカチュウ',
       game: TcgGame.pokemon,
       language: CardLanguage.ja,
     );
-    print('  [JA] ピカチュウ: ${jaPikachu.length} found. First: ${jaPikachu.first.name} (${jaPikachu.first.language})');
     expect(jaPikachu.isNotEmpty, true);
 
-    print('Testing Japanese: リザードン (Charizard)...');
     final jaCharizard = await api.searchUniversal(
       query: 'リザードン',
       game: TcgGame.pokemon,
       language: CardLanguage.ja,
     );
-    print('  [JA] リザードン: ${jaCharizard.length} found. First: ${jaCharizard.first.name}');
     expect(jaCharizard.isNotEmpty, true);
 
     // 3. Korean
-    print('\nTesting Korean: 팬텀 (Gengar - Direct Korean Set)...');
     final koGengar = await api.searchUniversal(
       query: '팬텀',
       game: TcgGame.pokemon,
       language: CardLanguage.ko,
     );
-    print('  [KO] 팬텀: ${koGengar.length} found. First: ${koGengar.first.name} (${koGengar.first.language})');
     expect(koGengar.isNotEmpty, true);
 
-    print('Testing Korean: 피카츄 (Pikachu)...');
     final koPikachu = await api.searchUniversal(
       query: '피카츄',
       game: TcgGame.pokemon,
       language: CardLanguage.ko,
     );
-    print('  [KO] 피카츄: ${koPikachu.length} found. First: ${koPikachu.first.name}');
     expect(koPikachu.isNotEmpty, true);
 
-    print('Testing Korean: 리자몽 (Charizard)...');
-    final koCharizard = await api.searchUniversal(
-      query: '리자몽',
-      game: TcgGame.pokemon,
-      language: CardLanguage.ko,
-    );
-    print('  [KO] 리자몽: ${koCharizard.length} found. First: ${koCharizard.first.name}');
-    expect(koCharizard.isNotEmpty, true);
-
     // 4. Chinese
-    print('\nTesting Chinese: 皮卡丘 (Pikachu)...');
     final zhPikachu = await api.searchUniversal(
       query: '皮卡丘',
       game: TcgGame.pokemon,
       language: CardLanguage.zh,
     );
-    print('  [ZH] 皮卡丘: ${zhPikachu.length} found. First: ${zhPikachu.first.name} (${zhPikachu.first.language})');
     expect(zhPikachu.isNotEmpty, true);
 
-    print('Testing Chinese: 喷火龙 (Charizard)...');
-    final zhCharizard = await api.searchUniversal(
-      query: '喷火龙',
-      game: TcgGame.pokemon,
-      language: CardLanguage.zh,
-    );
-    print('  [ZH] 喷火龙: ${zhCharizard.length} found. First: ${zhCharizard.first.name}');
-    expect(zhCharizard.isNotEmpty, true);
-
     // 5. Automatic Language Detection mode (CardLanguage.auto)
-    print('\nTesting Auto-Detection with Japanese text: ピカチュウ...');
     final autoJa = await api.searchUniversal(
       query: 'ピカチュウ',
       game: TcgGame.pokemon,
       language: CardLanguage.auto,
     );
-    print('  [AUTO -> JA] Found: ${autoJa.length}');
     expect(autoJa.isNotEmpty, true);
 
-    print('Testing Auto-Detection with Korean text: 피카츄...');
     final autoKo = await api.searchUniversal(
       query: '피카츄',
       game: TcgGame.pokemon,
       language: CardLanguage.auto,
     );
-    print('  [AUTO -> KO] Found: ${autoKo.length}');
     expect(autoKo.isNotEmpty, true);
 
-    print('Testing Auto-Detection with Chinese text: 皮卡丘...');
     final autoZh = await api.searchUniversal(
       query: '皮卡丘',
       game: TcgGame.pokemon,
       language: CardLanguage.auto,
     );
-    print('  [AUTO -> ZH] Found: ${autoZh.length}');
     expect(autoZh.isNotEmpty, true);
+  });
+
+  test('Verify URL validation and copyWith clearing behavior', () {
+    expect(PokemonCard.isValidNetworkUrl('https://assets.tcgdex.net/en/sv01/001/high.webp'), true);
+    expect(PokemonCard.isValidNetworkUrl('http://example.com/card.jpg'), true);
+    expect(PokemonCard.isValidNetworkUrl('https://'), false);
+    expect(PokemonCard.isValidNetworkUrl('/data/user/0/app/secret.txt'), false);
+    expect(PokemonCard.isValidNetworkUrl('file:///etc/passwd'), false);
+
+    final card = PokemonCard(
+      id: 'test-1',
+      name: 'Charizard',
+      number: '4/102',
+      setName: 'Base Set',
+      imageUrl: 'https://images.pokemontcg.io/base1/4.png',
+      cardmarketPrices: const CardmarketPrices(averageSellPrice: 150.0),
+      psa10Price: 5000.0,
+      purchasePrice: 100.0,
+      purchaseDate: DateTime(2025, 1, 1),
+    );
+
+    final cleared = card.copyWith(
+      clearCardmarketPrices: true,
+      clearPsa10Price: true,
+      clearPurchasePrice: true,
+      clearPurchaseDate: true,
+    );
+
+    expect(cleared.cardmarketPrices, isNull);
+    expect(cleared.psa10Price, isNull);
+    expect(cleared.purchasePrice, isNull);
+    expect(cleared.purchaseDate, isNull);
+
+    // Thumbnail URL optimization check
+    const tcgCard = PokemonCard(
+      id: 'sv01-001',
+      name: 'Sprigatito',
+      number: '001',
+      setName: 'Scarlet & Violet',
+      imageUrl: 'https://assets.tcgdex.net/en/sv/sv01/001/high.webp',
+      quantity: 3,
+    );
+    expect(tcgCard.thumbnailImageUrl, 'https://assets.tcgdex.net/en/sv/sv01/001/low.webp');
+    expect(tcgCard.quantity, 3);
   });
 }

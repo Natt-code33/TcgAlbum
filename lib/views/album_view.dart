@@ -13,10 +13,23 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import '../models/pokemon_card.dart';
 import '../services/album_storage_service.dart';
+import '../services/tcg_api_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/game_badge.dart';
 import 'scanner_view.dart';
 import 'manual_card_view.dart';
+
+enum AlbumSortOption {
+  recent('Recientes', Icons.schedule_rounded),
+  priceDesc('Mayor valor (€)', Icons.trending_up_rounded),
+  priceAsc('Menor valor (€)', Icons.trending_down_rounded),
+  nameAsc('Nombre (A-Z)', Icons.sort_by_alpha_rounded),
+  numberAsc('Número (#)', Icons.tag_rounded);
+
+  final String label;
+  final IconData icon;
+  const AlbumSortOption(this.label, this.icon);
+}
 
 class AlbumView extends StatefulWidget {
   const AlbumView({super.key});
@@ -27,17 +40,29 @@ class AlbumView extends StatefulWidget {
 
 class _AlbumViewState extends State<AlbumView> {
   final AlbumStorageService _storage = AlbumStorageService();
+  final TcgApiService _apiService = TcgApiService();
+  final TextEditingController _searchController = TextEditingController();
 
   List<TcgAlbum> _albums = [];
   TcgAlbum? _currentAlbum;
   List<PokemonCard> _cards = [];
   bool _isLoading = true;
+  bool _isRefreshingPrices = false;
+  bool _showSearchBar = false;
+  String _searchQuery = '';
+  AlbumSortOption _sortOption = AlbumSortOption.recent;
   TcgGame _filterGame = TcgGame.all;
 
   @override
   void initState() {
     super.initState();
     _loadAlbumsAndActive();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadAlbumsAndActive() async {
@@ -331,13 +356,78 @@ class _AlbumViewState extends State<AlbumView> {
     }
   }
 
-  Future<void> _showCardDetails(PokemonCard card) async {
+  Future<void> _updateCardQuantity(PokemonCard card, int newQuantity) async {
+    if (newQuantity <= 0) {
+      await _deleteCard(card);
+      return;
+    }
+    final updated = card.copyWith(quantity: newQuantity);
+    await _storage.updateCard(updated);
+    await _loadAlbumsAndActive();
+  }
+
+  Future<void> _refreshAlbumPrices() async {
+    if (_isRefreshingPrices || _cards.isEmpty) return;
+
+    setState(() => _isRefreshingPrices = true);
+    int updatedCount = 0;
+
+    try {
+      final currentCards = List<PokemonCard>.from(_cards);
+      for (int i = 0; i < currentCards.length; i++) {
+        final c = currentCards[i];
+        if (c.game == TcgGame.pokemon && !c.id.startsWith('custom_')) {
+          final detail = await _apiService.fetchCardDetail(
+            c.id,
+            lang: c.language ?? 'es',
+          );
+          if (detail?.cardmarketPrices != null) {
+            currentCards[i] = c.copyWith(
+              cardmarketPrices: detail!.cardmarketPrices,
+            );
+            updatedCount++;
+          }
+        }
+      }
+
+      if (updatedCount > 0) {
+        await _storage.saveAlbum(currentCards);
+        await _loadAlbumsAndActive();
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              updatedCount > 0
+                  ? 'Precios actualizados en $updatedCount cartas.'
+                  : 'Los precios de tus cartas ya están al día.',
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error al actualizar precios: $e')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isRefreshingPrices = false);
+      }
+    }
+  }
+
+  Future<void> _showCardDetails(PokemonCard initialCard) async {
+    PokemonCard card = initialCard;
     await showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: const Color(0xFF16213E),
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (ctx) => Padding(
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) => Padding(
         padding: EdgeInsets.only(
           left: 20,
           right: 20,
@@ -359,10 +449,11 @@ class _AlbumViewState extends State<AlbumView> {
             Center(
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(12),
-                child: card.imageUrl.startsWith('http')
+                child: PokemonCard.isValidNetworkUrl(card.imageUrl)
                     ? CachedNetworkImage(
                         imageUrl: card.imageUrl,
                         height: 240,
+                        memCacheWidth: 750,
                         fit: BoxFit.contain,
                         placeholder: (_, __) => const SizedBox(
                           height: 240,
@@ -374,7 +465,7 @@ class _AlbumViewState extends State<AlbumView> {
                         ),
                       )
                     : (card.imageUrl.isNotEmpty && File(card.imageUrl).existsSync()
-                        ? Image.file(File(card.imageUrl), height: 240, fit: BoxFit.contain)
+                        ? Image.file(File(card.imageUrl), height: 240, cacheWidth: 750, fit: BoxFit.contain)
                         : const SizedBox(
                             height: 240,
                             child: Icon(Icons.image_not_supported, color: Colors.white38, size: 60),
@@ -394,9 +485,63 @@ class _AlbumViewState extends State<AlbumView> {
               ],
             ),
             const SizedBox(height: 8),
-            Text(
-              card.setName.isNotEmpty ? '${card.setName} • #${card.number}' : 'Ref: #${card.number}',
-              style: const TextStyle(color: Colors.white60, fontSize: 13),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Text(
+                    card.setName.isNotEmpty ? '${card.setName} • #${card.number}' : 'Ref: #${card.number}',
+                    style: const TextStyle(color: Colors.white60, fontSize: 13),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                // Selector de cantidad de copias (x1, x2, x3...)
+                Container(
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0F3460),
+                    borderRadius: BorderRadius.circular(999),
+                    border: Border.all(color: AppTheme.primary.withValues(alpha: 0.4)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        constraints: const BoxConstraints(minWidth: 32, minHeight: 28),
+                        padding: EdgeInsets.zero,
+                        icon: const Icon(Icons.remove, size: 15, color: Colors.white70),
+                        onPressed: card.quantity > 1
+                            ? () async {
+                                final updated = card.copyWith(quantity: card.quantity - 1);
+                                setModalState(() => card = updated);
+                                await _updateCardQuantity(card, updated.quantity);
+                              }
+                            : null,
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 6),
+                        child: Text(
+                          'x${card.quantity}',
+                          style: GoogleFonts.outfit(
+                            color: AppTheme.primary,
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        constraints: const BoxConstraints(minWidth: 32, minHeight: 28),
+                        padding: EdgeInsets.zero,
+                        icon: const Icon(Icons.add, size: 15, color: AppTheme.primary),
+                        onPressed: () async {
+                          final updated = card.copyWith(quantity: card.quantity + 1);
+                          setModalState(() => card = updated);
+                          await _updateCardQuantity(card, updated.quantity);
+                        },
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 12),
             Container(
@@ -536,12 +681,59 @@ class _AlbumViewState extends State<AlbumView> {
           ],
         ),
       ),
+      ),
     );
   }
 
   List<PokemonCard> get _filteredCards {
-    if (_filterGame == TcgGame.all) return _cards;
-    return _cards.where((c) => c.game == _filterGame).toList();
+    var list = _filterGame == TcgGame.all
+        ? List<PokemonCard>.from(_cards)
+        : _cards.where((c) => c.game == _filterGame).toList();
+
+    if (_searchQuery.trim().isNotEmpty) {
+      final q = _searchQuery.trim().toLowerCase();
+      list = list.where((c) {
+        return c.name.toLowerCase().contains(q) ||
+            c.setName.toLowerCase().contains(q) ||
+            c.number.toLowerCase().contains(q);
+      }).toList();
+    }
+
+    double unitPrice(PokemonCard c) =>
+        c.cardmarketPrices?.averageSellPrice ??
+        c.cardmarketPrices?.trendPrice ??
+        0.0;
+
+    switch (_sortOption) {
+      case AlbumSortOption.recent:
+        break;
+      case AlbumSortOption.priceDesc:
+        list.sort((a, b) => unitPrice(b).compareTo(unitPrice(a)));
+        break;
+      case AlbumSortOption.priceAsc:
+        list.sort((a, b) => unitPrice(a).compareTo(unitPrice(b)));
+        break;
+      case AlbumSortOption.nameAsc:
+        list.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+        break;
+      case AlbumSortOption.numberAsc:
+        list.sort((a, b) {
+          final na = int.tryParse(a.number.replaceAll(RegExp(r'[^\d]'), '')) ?? 99999;
+          final nb = int.tryParse(b.number.replaceAll(RegExp(r'[^\d]'), '')) ?? 99999;
+          return na.compareTo(nb);
+        });
+        break;
+    }
+
+    return list;
+  }
+
+  int get _totalFilteredCopies {
+    int count = 0;
+    for (final c in _filteredCards) {
+      count += c.quantity;
+    }
+    return count;
   }
 
   double get _totalEstimatedValue {
@@ -550,7 +742,7 @@ class _AlbumViewState extends State<AlbumView> {
       final price = c.cardmarketPrices?.averageSellPrice ??
           c.cardmarketPrices?.trendPrice ??
           0.0;
-      total += price;
+      total += price * c.quantity;
     }
     return total;
   }
@@ -559,7 +751,7 @@ class _AlbumViewState extends State<AlbumView> {
     double total = 0.0;
     for (final c in _filteredCards) {
       if (c.purchasePrice != null) {
-        total += c.purchasePrice!;
+        total += c.purchasePrice! * c.quantity;
       }
     }
     return total;
@@ -583,6 +775,34 @@ class _AlbumViewState extends State<AlbumView> {
           ),
         ),
         actions: [
+          IconButton(
+            icon: Icon(
+              _showSearchBar ? Icons.search_off_rounded : Icons.search_rounded,
+              color: _showSearchBar ? AppTheme.primary : Colors.white70,
+            ),
+            tooltip: 'Buscar o filtrar en el álbum',
+            onPressed: () {
+              setState(() {
+                _showSearchBar = !_showSearchBar;
+                if (!_showSearchBar) {
+                  _searchController.clear();
+                  _searchQuery = '';
+                }
+              });
+            },
+          ),
+          if (_cards.isNotEmpty)
+            IconButton(
+              icon: _isRefreshingPrices
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.cyanAccent),
+                    )
+                  : const Icon(Icons.sync_rounded, color: Colors.white70),
+              tooltip: 'Actualizar precios de mercado',
+              onPressed: _isRefreshingPrices ? null : _refreshAlbumPrices,
+            ),
           IconButton(
             icon: const Icon(Icons.backup_outlined, color: Colors.white70),
             tooltip: 'Copia de seguridad',
@@ -608,8 +828,12 @@ class _AlbumViewState extends State<AlbumView> {
                     // ── Filtro horizontal por Franquicia TCG ───────────────────
                     _buildFilterChips(),
 
+                    // ── Barra de búsqueda interna y ordenación ─────────────────
+                    if (_showSearchBar || _sortOption != AlbumSortOption.recent)
+                      _buildSearchAndSortBar(),
+
                     // ── Hero Card con total de cartas y valor de colección ─────
-                    if (_cards.isNotEmpty) _buildSummaryBar(filtered.length),
+                    if (_cards.isNotEmpty) _buildSummaryBar(_totalFilteredCopies),
 
                     // ── Contenido: Grid o Estado Vacío ────────────────────────
                     Expanded(
@@ -621,6 +845,99 @@ class _AlbumViewState extends State<AlbumView> {
       ),
 
       bottomNavigationBar: _buildBottomBar(),
+    );
+  }
+
+  Widget _buildSearchAndSortBar() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: SizedBox(
+              height: 40,
+              child: TextField(
+                controller: _searchController,
+                onChanged: (val) => setState(() => _searchQuery = val),
+                style: const TextStyle(color: Colors.white, fontSize: 13),
+                decoration: InputDecoration(
+                  hintText: 'Buscar por nombre, set o # en tu álbum...',
+                  hintStyle: const TextStyle(color: Colors.white38, fontSize: 12),
+                  prefixIcon: const Icon(Icons.search, color: Colors.white54, size: 18),
+                  suffixIcon: _searchQuery.isNotEmpty
+                      ? IconButton(
+                          icon: const Icon(Icons.clear, color: Colors.white54, size: 16),
+                          onPressed: () {
+                            _searchController.clear();
+                            setState(() => _searchQuery = '');
+                          },
+                        )
+                      : null,
+                  filled: true,
+                  fillColor: AppTheme.bgSurface.withValues(alpha: 0.85),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 10),
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(color: Color(0x334B68B8)),
+                  ),
+                  enabledBorder: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    borderSide: const BorderSide(color: Color(0x334B68B8)),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          PopupMenuButton<AlbumSortOption>(
+            tooltip: 'Ordenar cartas',
+            color: AppTheme.bgSurface,
+            onSelected: (opt) => setState(() => _sortOption = opt),
+            itemBuilder: (_) => AlbumSortOption.values.map((opt) {
+              final selected = _sortOption == opt;
+              return PopupMenuItem<AlbumSortOption>(
+                value: opt,
+                child: Row(
+                  children: [
+                    Icon(
+                      opt.icon,
+                      size: 18,
+                      color: selected ? AppTheme.primary : Colors.white70,
+                    ),
+                    const SizedBox(width: 10),
+                    Text(
+                      opt.label,
+                      style: GoogleFonts.outfit(
+                        color: selected ? AppTheme.primary : Colors.white,
+                        fontWeight: selected ? FontWeight.bold : FontWeight.normal,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }).toList(),
+            child: Container(
+              height: 40,
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              decoration: BoxDecoration(
+                color: AppTheme.bgSurface.withValues(alpha: 0.85),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0x334B68B8)),
+              ),
+              child: Row(
+                children: [
+                  Icon(_sortOption.icon, size: 16, color: AppTheme.primary),
+                  const SizedBox(width: 4),
+                  Text(
+                    _sortOption.label,
+                    style: GoogleFonts.outfit(color: Colors.white, fontSize: 11.5),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1092,9 +1409,10 @@ class _CardTile extends StatelessWidget {
                 children: [
                   ClipRRect(
                     borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-                    child: card.imageUrl.startsWith('http')
+                    child: PokemonCard.isValidNetworkUrl(card.imageUrl)
                         ? CachedNetworkImage(
-                            imageUrl: card.imageUrl,
+                            imageUrl: card.thumbnailImageUrl,
+                            memCacheWidth: 320,
                             fit: BoxFit.cover,
                             placeholder: (context, url) => Container(
                               color: const Color(0xFF16213E),
@@ -1108,7 +1426,7 @@ class _CardTile extends StatelessWidget {
                             ),
                           )
                         : (card.imageUrl.isNotEmpty && File(card.imageUrl).existsSync()
-                            ? Image.file(File(card.imageUrl), fit: BoxFit.cover)
+                            ? Image.file(File(card.imageUrl), cacheWidth: 320, fit: BoxFit.cover)
                             : Container(
                                 color: const Color(0xFF16213E),
                                 child: const Icon(Icons.image_not_supported_rounded, color: Colors.white24, size: 40),
@@ -1160,6 +1478,28 @@ class _CardTile extends StatelessWidget {
                     right: 8,
                     child: GameBadge(game: card.game, showLabel: false, iconSize: 12),
                   ),
+
+                  // Badge de cantidad si hay copias repetidas (x2, x3...)
+                  if (card.quantity > 1)
+                    Positioned(
+                      bottom: 8,
+                      left: 8,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: AppTheme.primary,
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          'x${card.quantity}',
+                          style: const TextStyle(
+                            color: Colors.black,
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                    ),
 
                   // Badge de condición
                   if (card.condition != null)

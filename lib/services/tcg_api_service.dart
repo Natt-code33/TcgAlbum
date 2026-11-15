@@ -33,6 +33,11 @@ class TcgApiService {
     'User-Agent': 'TcgAlbum/1.0 (Android; Flutter)',
   };
 
+  static final http.Client _sharedClient = http.Client();
+  final http.Client _client;
+
+  TcgApiService({http.Client? client}) : _client = client ?? _sharedClient;
+
   // ──────────────────────────────────────────────────────────────────────────
   // BÚSQUEDA UNIVERSAL (Multi-TCG)
   // Cuando se selecciona un juego específico, SOLAMENTE consulta ese juego
@@ -185,7 +190,7 @@ class TcgApiService {
 
       // Si TCGdex no arrojó resultados o arrojó muy pocos, consultar pokemontcg.io (Base completa)
       if (results.isEmpty) {
-        final translatedQuery = _translateAsianPokemonName(query);
+        final translatedQuery = await _translateAsianPokemonNameAsync(query);
         final ioQuery = translatedQuery.isNotEmpty ? translatedQuery : query;
         var ioResults = await _searchPokemonTcgIo(query: ioQuery, number: number);
         // Si falló con nombre + número (porque el nombre estaba mal leído), probar solo por número
@@ -235,7 +240,7 @@ class TcgApiService {
 
     for (final urlStr in urlsToTry) {
       try {
-        final res = await http.get(Uri.parse(urlStr), headers: _headers).timeout(const Duration(seconds: 4));
+        final res = await _client.get(Uri.parse(urlStr), headers: _headers).timeout(const Duration(seconds: 4));
         if (res.statusCode == 200) {
           final List<dynamic> data = json.decode(res.body);
           for (final item in data) {
@@ -255,7 +260,7 @@ class TcgApiService {
 
     // Si no encontró resultados con el nombre asiático en TCGdex, intentar traducir a inglés
     if (allCards.isEmpty) {
-      final translated = _translateAsianPokemonName(coreName);
+      final translated = await _translateAsianPokemonNameAsync(coreName);
       if (translated.isNotEmpty && translated.toLowerCase() != coreName.toLowerCase()) {
         final enCards = await searchByName(translated, language: CardLanguage.en);
         if (enCards.isNotEmpty) return enCards;
@@ -390,7 +395,7 @@ class TcgApiService {
       for (final numCandidate in candidateNumbers) {
         final url = Uri.parse('$_tcgdexBase/$l/cards?localId=$numCandidate');
         try {
-          final res = await http.get(url, headers: _headers).timeout(const Duration(seconds: 4));
+          final res = await _client.get(url, headers: _headers).timeout(const Duration(seconds: 4));
           if (res.statusCode == 200) {
             final List<dynamic> data = json.decode(res.body);
             for (final item in data) {
@@ -434,7 +439,7 @@ class TcgApiService {
       final q = queryParts.join(' ');
       final url = Uri.parse('$_pokemonTcgIoBase/cards?q=${Uri.encodeComponent(q)}&pageSize=25');
 
-      final res = await http.get(url, headers: _headers).timeout(const Duration(seconds: 5));
+      final res = await _client.get(url, headers: _headers).timeout(const Duration(seconds: 5));
       if (res.statusCode == 200) {
         final Map<String, dynamic> body = json.decode(res.body);
         final List<dynamic>? data = body['data'] as List?;
@@ -453,11 +458,11 @@ class TcgApiService {
   Future<PokemonCard?> fetchCardDetail(String cardId, {String lang = 'en'}) async {
     final url = Uri.parse('$_tcgdexBase/$lang/cards/$cardId');
     try {
-      final response = await http.get(url, headers: _headers).timeout(const Duration(seconds: 5));
+      final response = await _client.get(url, headers: _headers).timeout(const Duration(seconds: 5));
       if (response.statusCode != 200) {
         if (lang != 'en') {
           final fallbackUrl = Uri.parse('$_tcgdexBase/en/cards/$cardId');
-          final fallbackRes = await http.get(fallbackUrl, headers: _headers).timeout(const Duration(seconds: 4));
+          final fallbackRes = await _client.get(fallbackUrl, headers: _headers).timeout(const Duration(seconds: 4));
           if (fallbackRes.statusCode == 200) {
             final Map<String, dynamic> data = json.decode(fallbackRes.body);
             return PokemonCard.fromTcgdexDetail(data, language: 'en');
@@ -525,7 +530,7 @@ class TcgApiService {
     );
 
     try {
-      final res = await http.get(
+      final res = await _client.get(
         url,
         headers: {
           'User-Agent': 'TcgAlbum/1.0',
@@ -550,7 +555,7 @@ class TcgApiService {
         final fallbackUrl = Uri.parse(
           'https://api.scryfall.com/cards/search?q=${Uri.encodeComponent(fallbackQuery)}',
         );
-        final fallbackRes = await http.get(fallbackUrl, headers: {
+        final fallbackRes = await _client.get(fallbackUrl, headers: {
           'User-Agent': 'TcgAlbum/1.0',
           'Accept': 'application/json',
         }).timeout(const Duration(seconds: 4));
@@ -593,7 +598,7 @@ class TcgApiService {
             'https://db.ygoprodeck.com/api/v7/cardinfo.php?fname=${Uri.encodeComponent(clean)}$langParam');
 
     try {
-      final res = await http.get(url, headers: _headers).timeout(const Duration(seconds: 5));
+      final res = await _client.get(url, headers: _headers).timeout(const Duration(seconds: 5));
       if (res.statusCode == 200) {
         final Map<String, dynamic> body = json.decode(res.body);
         final List<dynamic>? data = body['data'] as List?;
@@ -613,7 +618,7 @@ class TcgApiService {
             ? Uri.parse('https://db.ygoprodeck.com/api/v7/cardinfo.php?id=$clean')
             : Uri.parse(
                 'https://db.ygoprodeck.com/api/v7/cardinfo.php?fname=${Uri.encodeComponent(clean)}');
-        final fallbackRes = await http.get(fallbackUrl, headers: _headers).timeout(const Duration(seconds: 4));
+        final fallbackRes = await _client.get(fallbackUrl, headers: _headers).timeout(const Duration(seconds: 4));
         if (fallbackRes.statusCode == 200) {
           final Map<String, dynamic> body = json.decode(fallbackRes.body);
           final List<dynamic>? data = body['data'] as List?;
@@ -653,7 +658,7 @@ class TcgApiService {
             'https://digimoncard.io/api-public/search.php?n=${Uri.encodeComponent(clean)}');
 
     try {
-      final res = await http.get(url, headers: _headers).timeout(const Duration(seconds: 5));
+      final res = await _client.get(url, headers: _headers).timeout(const Duration(seconds: 5));
       if (res.statusCode == 200) {
         final dynamic decoded = json.decode(res.body);
         if (decoded is List) {
@@ -687,7 +692,7 @@ class TcgApiService {
         : Uri.parse('https://optcgapi.com/api/sets/filtered/?card_name=${Uri.encodeComponent(clean)}');
 
     try {
-      final res = await http.get(url, headers: _headers).timeout(const Duration(seconds: 5));
+      final res = await _client.get(url, headers: _headers).timeout(const Duration(seconds: 5));
       if (res.statusCode == 200) {
         final dynamic decoded = json.decode(res.body);
         if (decoded is List) {
@@ -722,7 +727,7 @@ class TcgApiService {
     );
 
     try {
-      final res = await http.get(url, headers: _headers).timeout(const Duration(seconds: 5));
+      final res = await _client.get(url, headers: _headers).timeout(const Duration(seconds: 5));
       if (res.statusCode == 200) {
         final dynamic decoded = json.decode(res.body);
         if (decoded is List) {
@@ -800,7 +805,7 @@ class TcgApiService {
     final url = Uri.parse('$_tcgdexBase/$lang/sets');
     try {
       if (!_setsCache.containsKey(lang)) {
-        final response = await http.get(url, headers: _headers).timeout(const Duration(seconds: 4));
+        final response = await _client.get(url, headers: _headers).timeout(const Duration(seconds: 4));
         if (response.statusCode == 200) {
           final List<dynamic> sets = json.decode(response.body);
           _setsCache[lang] = sets.whereType<Map<String, dynamic>>().toList();
@@ -834,7 +839,7 @@ class TcgApiService {
       String setId, String number, {String lang = 'en'}) async {
     final url = Uri.parse('$_tcgdexBase/$lang/sets/$setId/$number');
     try {
-      final response = await http.get(url, headers: _headers).timeout(const Duration(seconds: 4));
+      final response = await _client.get(url, headers: _headers).timeout(const Duration(seconds: 4));
       if (response.statusCode != 200) return null;
 
       final Map<String, dynamic> data = json.decode(response.body);
@@ -844,8 +849,18 @@ class TcgApiService {
     }
   }
 
-  /// Traductor directo de nombres de Pokémon en Coreano, Japonés y Chino a su nombre en inglés.
-  /// Permite encontrar cartas cuando el endpoint local no tiene indexado el nombre o en pokemontcg.io.
+  /// Traductor directo de nombres de Pokémon en Coreano, Japonés, Chino, Francés, Alemán e Italiano a su nombre en inglés.
+  /// Consulta tanto el diccionario en memoria como las 1.025 especies Pokémon en SQLite local.
+  Future<String> _translateAsianPokemonNameAsync(String name) async {
+    final syncResult = _translateAsianPokemonName(name);
+    if (syncResult.isNotEmpty) return syncResult;
+
+    final dbResult = await LocalCatalogService.instance.translatePokemonSpeciesToEnglish(name);
+    if (dbResult != null && dbResult.isNotEmpty) return dbResult;
+
+    return '';
+  }
+
   String _translateAsianPokemonName(String name) {
     final clean = name.trim();
     if (clean.isEmpty) return '';

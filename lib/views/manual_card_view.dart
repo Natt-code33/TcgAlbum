@@ -148,6 +148,8 @@ class _ManualCardViewState extends State<ManualCardView> {
       final photo = await _picker.pickImage(
         source: source,
         imageQuality: 90,
+        maxWidth: 1200,
+        maxHeight: 1600,
       );
       if (photo != null) {
         setState(() {
@@ -184,22 +186,25 @@ class _ManualCardViewState extends State<ManualCardView> {
 
     String finalImageUrl = '';
     if (_imageFile != null) {
-      finalImageUrl = _imageFile!.path;
+      finalImageUrl = await _storage.persistCardImage(_imageFile!);
     } else if (_imageUrlController.text.trim().isNotEmpty) {
       final inputUrl = _imageUrlController.text.trim();
-      if (!inputUrl.startsWith('https://') && !inputUrl.startsWith('http://')) {
+      if (!PokemonCard.isValidNetworkUrl(inputUrl)) {
         setState(() => _isSaving = false);
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('La URL de la imagen debe comenzar por https://'),
+            content: Text('Introduce una URL válida que comience por https://'),
             backgroundColor: Colors.redAccent,
           ),
         );
         return;
       }
       finalImageUrl = inputUrl;
-    } else if (widget.cardToEdit != null) {
-      finalImageUrl = widget.cardToEdit!.imageUrl;
+    } else if (widget.cardToEdit != null &&
+        !widget.cardToEdit!.imageUrl.startsWith('http')) {
+      // Si se quitó la foto local que tenía la carta editada
+      finalImageUrl = '';
     }
 
     int? setTotal;
@@ -213,19 +218,19 @@ class _ManualCardViewState extends State<ManualCardView> {
       final updated = widget.cardToEdit!.copyWith(
         name: rawName,
         number: rawNumber,
-        setName: rawSet.isNotEmpty ? rawSet : widget.cardToEdit!.setName,
+        setName: rawSet,
         imageUrl: finalImageUrl,
         game: _selectedGame,
         cardmarketPrices: cmPrice != null
             ? CardmarketPrices(
                 averageSellPrice: cmPrice,
                 trendPrice: cmPrice,
-                psa10Price: psaPrice ?? widget.cardToEdit!.psa10Price,
+                psa10Price: psaPrice,
               )
             : (psaPrice != null
                 ? CardmarketPrices(psa10Price: psaPrice)
-                : widget.cardToEdit!.cardmarketPrices),
-        psa10Price: psaPrice ?? widget.cardToEdit!.psa10Price,
+                : null),
+        psa10Price: psaPrice,
         setPrintedTotal: setTotal ?? widget.cardToEdit!.setPrintedTotal,
         setTotal: setTotal ?? widget.cardToEdit!.setTotal,
         language: _selectedLanguage.apiCode,
@@ -233,7 +238,10 @@ class _ManualCardViewState extends State<ManualCardView> {
         purchaseDate: _purchaseDate,
         condition: _selectedCondition,
         gradingScore: gradingScore.isNotEmpty ? gradingScore : null,
+        clearCardmarketPrices: cmPrice == null && psaPrice == null,
+        clearPsa10Price: psaPrice == null,
         clearPurchasePrice: purchasePrice == null,
+        clearPurchaseDate: _purchaseDate == null,
         clearCondition: _selectedCondition == null,
         clearGradingScore: gradingScore.isEmpty,
       );
@@ -256,7 +264,7 @@ class _ManualCardViewState extends State<ManualCardView> {
 
     // Modo creación: añade una nueva carta con ID único
     final card = PokemonCard(
-      id: 'custom_${DateTime.now().millisecondsSinceEpoch}',
+      id: 'custom_${DateTime.now().microsecondsSinceEpoch}',
       name: rawName,
       number: rawNumber,
       setName: rawSet.isNotEmpty ? rawSet : 'Colección ${_selectedGame.label}',
@@ -544,7 +552,7 @@ class _ManualCardViewState extends State<ManualCardView> {
               child: Image.file(_imageFile!, height: 180, fit: BoxFit.contain),
             ),
             const SizedBox(height: 10),
-          ] else if (_imageUrlController.text.trim().isNotEmpty) ...[
+          ] else if (PokemonCard.isValidNetworkUrl(_imageUrlController.text.trim())) ...[
             ClipRRect(
               borderRadius: BorderRadius.circular(10),
               child: CachedNetworkImage(
@@ -752,15 +760,26 @@ class _ManualCardViewState extends State<ManualCardView> {
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text(
-                          _purchaseDate != null
-                              ? '${_purchaseDate!.day}/${_purchaseDate!.month}/${_purchaseDate!.year}'
-                              : 'Fecha compra',
-                          style: TextStyle(
-                            color: _purchaseDate != null ? Colors.white : Colors.white38,
-                            fontSize: 12,
+                        Expanded(
+                          child: Text(
+                            _purchaseDate != null
+                                ? '${_purchaseDate!.day}/${_purchaseDate!.month}/${_purchaseDate!.year}'
+                                : 'Fecha compra',
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: _purchaseDate != null ? Colors.white : Colors.white38,
+                              fontSize: 12,
+                            ),
                           ),
                         ),
+                        if (_purchaseDate != null)
+                          GestureDetector(
+                            onTap: () => setState(() => _purchaseDate = null),
+                            child: const Padding(
+                              padding: EdgeInsets.only(right: 4),
+                              child: Icon(Icons.close, size: 16, color: Colors.redAccent),
+                            ),
+                          ),
                         const Icon(Icons.calendar_today, size: 16, color: Colors.white54),
                       ],
                     ),

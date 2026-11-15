@@ -12,7 +12,9 @@
 // ============================================================
 
 import 'dart:io';
+import 'dart:isolate';
 import 'dart:math';
+import 'dart:typed_data';
 import 'dart:developer' as developer;
 import 'package:http/http.dart' as http;
 import 'package:image/image.dart' as img;
@@ -34,16 +36,25 @@ class VisualMatchResult {
   int get matchPercentage => (similarity * 100).clamp(0, 100).round();
 }
 
+typedef _VisualSignature = ({List<bool> hash, List<int> colorProfile});
+
 class ImageMatchingService {
   static const Map<String, String> _headers = {
     'Accept': 'image/*, application/json',
     'User-Agent': 'TcgAlbum/1.0 (Android; Flutter)',
   };
 
-  /// Firma visual precalculada de una imagen.
-  /// Incluye dHash (gradiente estructural) y perfil cromático por cuadrantes.
-  ({List<bool> hash, List<int> colorProfile})? _computeSignature(img.Image image) {
+  final http.Client _client;
+
+  ImageMatchingService({http.Client? client}) : _client = client ?? http.Client();
+
+  /// Decodifica bytes de imagen y calcula su firma visual (dHash + perfil cromático)
+  /// de forma estática para poder ejecutarse dentro de un Isolate secundario.
+  static _VisualSignature? _decodeAndComputeSignature(Uint8List imageBytes) {
     try {
+      final image = img.decodeImage(imageBytes);
+      if (image == null) return null;
+
       // 1. Recortar la región del arte / ilustración de la carta:
       // Verticalmente: entre el 15% y el 60% de la altura (donde está el dibujo)
       // Horizontalmente: entre el 10% y el 90% del ancho
@@ -85,16 +96,15 @@ class ImageMatchingService {
       }
 
       return (hash: hash, colorProfile: colorProfile);
-    } catch (e) {
-      developer.log('Error calculando firma visual: $e', name: 'ImageMatchingService');
+    } catch (_) {
       return null;
     }
   }
 
   /// Compara dos firmas visuales y devuelve una puntuación entre 0.0 y 1.0.
-  double _compareSignatures(
-    ({List<bool> hash, List<int> colorProfile}) sig1,
-    ({List<bool> hash, List<int> colorProfile}) sig2,
+  static double _compareSignatures(
+    _VisualSignature sig1,
+    _VisualSignature sig2,
   ) {
     // 1. Similitud de estructura por gradientes (Hamming distance sobre 256 bits)
     int diffBits = 0;
@@ -121,7 +131,7 @@ class ImageMatchingService {
   }
 
   /// Ordena una lista de cartas candidatas comparando visualmente su arte
-  /// con la foto capturada por el usuario.
+  /// con la foto capturada por el usuario en un Isolate en segundo plano.
   Future<List<VisualMatchResult>> rankCardsByVisualSimilarity({
     required File userPhotoFile,
     required List<PokemonCard> candidateCards,
@@ -132,53 +142,59 @@ class ImageMatchingService {
     }
 
     try {
-      // 1. Decodificar la foto del usuario
+      // 1. Leer bytes de la foto del usuario y calcular su firma en Isolate secundario
       final photoBytes = await userPhotoFile.readAsBytes();
-      final userImage = img.decodeImage(photoBytes);
-      if (userImage == null) {
-        return candidateCards.map((c) => VisualMatchResult(card: c, similarity: 0.0)).toList();
-      }
-
-      final userSig = _computeSignature(userImage);
+      final userSig = await Isolate.run(() => _decodeAndComputeSignature(photoBytes));
       if (userSig == null) {
         return candidateCards.map((c) => VisualMatchResult(card: c, similarity: 0.0)).toList();
       }
 
-      // 2. Comparar en paralelo con las cartas candidatas (hasta maxCandidatesToCompare)
+      // 2. Descargar bytes de las cartas candidatas en paralelo
       final candidates = candidateCards.take(maxCandidatesToCompare).toList();
       final remaining = candidateCards.skip(maxCandidatesToCompare).toList();
 
-      final futures = candidates.map((card) async {
-        try {
-          img.Image? refImage;
-
-          if (card.imageUrl.startsWith('http')) {
-            final res = await http
-                .get(Uri.parse(card.imageUrl), headers: _headers)
-                .timeout(const Duration(seconds: 4));
-            if (res.statusCode == 200) {
-              refImage = img.decodeImage(res.bodyBytes);
+      final candidateBytesList = await Future.wait(
+        candidates.map((card) async {
+          try {
+            if (PokemonCard.isValidNetworkUrl(card.imageUrl)) {
+              final res = await _client
+                  .get(Uri.parse(card.imageUrl), headers: _headers)
+                  .timeout(const Duration(seconds: 4));
+              if (res.statusCode == 200) {
+                return res.bodyBytes;
+              }
+            } else if (card.imageUrl.isNotEmpty && File(card.imageUrl).existsSync()) {
+              return await File(card.imageUrl).readAsBytes();
             }
-          } else if (card.imageUrl.isNotEmpty && File(card.imageUrl).existsSync()) {
-            final bytes = await File(card.imageUrl).readAsBytes();
-            refImage = img.decodeImage(bytes);
-          }
+          } catch (_) {}
+          return null;
+        }),
+      );
 
-          if (refImage != null) {
-            final refSig = _computeSignature(refImage);
-            if (refSig != null) {
-              final score = _compareSignatures(userSig, refSig);
-              return VisualMatchResult(card: card, similarity: score);
-            }
+      // 3. Procesar todas las imágenes candidatas y calcular puntuaciones en un único Isolate
+      final scores = await Isolate.run(() {
+        final results = <double>[];
+        for (final bytes in candidateBytesList) {
+          if (bytes == null) {
+            results.add(0.0);
+            continue;
           }
-        } catch (_) {}
-
-        return VisualMatchResult(card: card, similarity: 0.0);
+          final refSig = _decodeAndComputeSignature(bytes);
+          if (refSig != null) {
+            results.add(_compareSignatures(userSig, refSig));
+          } else {
+            results.add(0.0);
+          }
+        }
+        return results;
       });
 
-      final ranked = await Future.wait(futures);
+      final ranked = <VisualMatchResult>[];
+      for (int i = 0; i < candidates.length; i++) {
+        ranked.add(VisualMatchResult(card: candidates[i], similarity: scores[i]));
+      }
 
-      // 3. Ordenar de mayor a menor coincidencia visual
+      // 4. Ordenar de mayor a menor coincidencia visual
       ranked.sort((a, b) => b.similarity.compareTo(a.similarity));
 
       // Agregar las cartas restantes que no se alcanzaron a comparar al final
