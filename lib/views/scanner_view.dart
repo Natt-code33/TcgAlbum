@@ -1,12 +1,15 @@
 // ============================================================
 // views/scanner_view.dart
-// Pantalla de escaneo con cámara y búsqueda manual universal:
-// Pokémon, Magic (MTG), Yu-Gi-Oh!, Digimon, One Piece, Lorcana, etc.
-// Multiidioma: Español, Inglés, Japonés, Coreano y Chino.
+// Pantalla de escaneo Pokémon TCG con estética Neon HUD:
+// - Logo Pokémon TCG SCANNER
+// - Visor HUD con esquinas neón Cian/Amarillo, láser y etiqueta flotante
+// - Tarjeta de resultado con precio estimado y los 3 botones píldora neón
+// - Barra inferior con Pokéball central luminosa
 // ============================================================
 
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -18,6 +21,7 @@ import '../services/tcg_api_service.dart';
 import '../services/image_matching_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/game_badge.dart';
+import '../widgets/pokemon_scanner_hud.dart';
 import 'manual_card_view.dart';
 
 class ScannerView extends StatefulWidget {
@@ -47,6 +51,7 @@ class _ScannerViewState extends State<ScannerView> {
   PokemonCard? _selectedCard;
   bool _isProcessing = false;
   bool _isMatchingImages = false;
+  bool _expandedHeroCard = false;
   Map<String, int> _visualScores = {};
   String? _errorMessage;
   late TcgGame _selectedGame;
@@ -132,8 +137,6 @@ class _ScannerViewState extends State<ScannerView> {
 
       setState(() {
         _ocrResult = result;
-        // Si el usuario tenía seleccionado Auto y el OCR detectó un idioma específico (ej: japonés),
-        // actualizar _selectedLanguage para que la UI y las búsquedas reflejen el idioma detectado
         if (_selectedLanguage == CardLanguage.auto &&
             result.detectedLanguage != CardLanguage.auto) {
           _selectedLanguage = result.detectedLanguage;
@@ -141,7 +144,6 @@ class _ScannerViewState extends State<ScannerView> {
       });
 
       if (result.pokemonName != null || result.collectionNumber != null) {
-        // Auto-rellenar el campo de búsqueda para que el usuario siempre vea lo que detectó el OCR
         if (result.collectionNumber != null) {
           _manualSearchController.text = result.pokemonName != null
               ? '${result.pokemonName} ${result.collectionNumber}'
@@ -158,7 +160,7 @@ class _ScannerViewState extends State<ScannerView> {
         setState(() {
           _isProcessing = false;
           _errorMessage =
-              'No se detectó el texto de la carta claramente. Asegúrate de encuadrar de cerca con buena luz, o introduce el número abajo.';
+              'No se detectó el texto con claridad. Encuadra bien la carta con buena luz o usa el buscador superior.';
         });
       }
     } catch (e) {
@@ -167,7 +169,7 @@ class _ScannerViewState extends State<ScannerView> {
   }
 
   // ──────────────────────────────────────────────────────────────────────────
-  // PASO 3: Consulta a las APIs TCG con protección contra carreras y mounted.
+  // PASO 3: Consulta al catálogo SQLite local + APIs TCG.
   // ──────────────────────────────────────────────────────────────────────────
   Future<void> _searchApi({
     String? pokemonName,
@@ -215,23 +217,19 @@ class _ScannerViewState extends State<ScannerView> {
           _isProcessing = false;
           _errorMessage =
               'No se encontraron cartas para esta búsqueda. '
-              'Puedes introducir todos sus datos manualmente si lo deseas.';
+              'Puedes introducir sus datos manualmente pulsando Ajustes o el icono de edición.';
         });
         return;
       }
 
-      PokemonCard? autoSelected;
-      if (results.length == 1) {
-        autoSelected = results.first;
-        if (autoSelected.game == TcgGame.pokemon &&
-            autoSelected.cardmarketPrices == null) {
-          final detail = await _apiService.fetchCardDetail(
-            autoSelected.id,
-            lang: autoSelected.language ?? _selectedLanguage.apiCode,
-          );
-          if (!mounted || currentRequestId != _searchRequestId) return;
-          if (detail != null) autoSelected = detail;
-        }
+      PokemonCard? autoSelected = results.first;
+      if (autoSelected.cardmarketPrices == null) {
+        final detail = await _apiService.fetchCardDetail(
+          autoSelected.id,
+          lang: autoSelected.language ?? _selectedLanguage.apiCode,
+        );
+        if (!mounted || currentRequestId != _searchRequestId) return;
+        if (detail != null) autoSelected = detail;
       }
 
       if (!mounted || currentRequestId != _searchRequestId) return;
@@ -242,8 +240,6 @@ class _ScannerViewState extends State<ScannerView> {
         _isProcessing = false;
       });
 
-      // Si tenemos una foto capturada y hay múltiples candidatas,
-      // comparar el arte visual para clasificar y destacar la carta idéntica.
       if (_capturedImage != null && results.length > 1) {
         _runVisualMatching(results);
       }
@@ -254,8 +250,7 @@ class _ScannerViewState extends State<ScannerView> {
     }
   }
 
-  /// Emparejamiento visual en segundo plano:
-  /// Compara el dibujo central de la foto con cada una de las candidatas encontradas.
+  /// Emparejamiento visual en segundo plano (Isolate):
   Future<void> _runVisualMatching(List<PokemonCard> candidates) async {
     if (_capturedImage == null || !mounted) return;
 
@@ -285,16 +280,12 @@ class _ScannerViewState extends State<ScannerView> {
         _visualScores = scores;
         _searchResults = sortedCards;
 
-        // Si la mejor coincidencia visual es notable (>= 50%), seleccionarla
-        if (bestMatch.similarity >= 0.50) {
+        if (bestMatch.similarity >= 0.45) {
           _selectedCard = bestMatch.card;
         }
       });
 
-      // Si es Pokémon y no tiene precio detallado, cargarlo
-      if (_selectedCard != null &&
-          _selectedCard!.game == TcgGame.pokemon &&
-          _selectedCard!.cardmarketPrices == null) {
+      if (_selectedCard != null && _selectedCard!.cardmarketPrices == null) {
         final detail = await _apiService.fetchCardDetail(
           _selectedCard!.id,
           lang: _selectedCard!.language ?? _selectedLanguage.apiCode,
@@ -310,9 +301,6 @@ class _ScannerViewState extends State<ScannerView> {
     }
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // PASO 4: Búsqueda manual.
-  // ──────────────────────────────────────────────────────────────────────────
   Future<void> _onManualSearch([String? overrideQuery]) async {
     final query = overrideQuery ?? _manualSearchController.text.trim();
     if (query.isEmpty) return;
@@ -322,14 +310,10 @@ class _ScannerViewState extends State<ScannerView> {
     await _searchApi(manualQuery: query);
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // PASO 5: Selección de carta en la lista.
-  // ──────────────────────────────────────────────────────────────────────────
   Future<void> _selectCard(PokemonCard card) async {
     setState(() => _isProcessing = true);
 
-    if (card.game == TcgGame.pokemon &&
-        (card.cardmarketPrices == null || card.setName.isEmpty)) {
+    if (card.cardmarketPrices == null || card.setName.isEmpty) {
       final detailed = await _apiService.fetchCardDetail(
         card.id,
         lang: card.language ?? _selectedLanguage.apiCode,
@@ -350,9 +334,6 @@ class _ScannerViewState extends State<ScannerView> {
     }
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // PASO 6: Guardar carta en el álbum local con feedback de duplicados.
-  // ──────────────────────────────────────────────────────────────────────────
   Future<void> _saveCard() async {
     if (_selectedCard == null) return;
 
@@ -363,15 +344,16 @@ class _ScannerViewState extends State<ScannerView> {
       if (isNew) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('¡"${_selectedCard!.name}" guardada en tu álbum!'),
-            backgroundColor: Colors.green,
+            content: Text('¡"${_selectedCard!.name}" añadida a tu Colección!'),
+            backgroundColor: const Color(0xFF00C853),
             duration: const Duration(seconds: 2),
           ),
         );
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('¡Añadida otra copia de "${_selectedCard!.name}" a tu álbum!'),
+            content: Text(
+                '¡Añadida otra copia de "${_selectedCard!.name}" a tu Colección!'),
             backgroundColor: Colors.green.shade700,
             duration: const Duration(seconds: 2),
           ),
@@ -381,11 +363,12 @@ class _ScannerViewState extends State<ScannerView> {
     }
   }
 
-  Future<void> _openManualEntry() async {
+  Future<void> _openManualEntry({PokemonCard? cardToEdit}) async {
     _keepCapturedImage = true;
     final saved = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
         builder: (_) => ManualCardView(
+          cardToEdit: cardToEdit,
           initialName: _ocrResult?.pokemonName ?? _manualSearchController.text,
           initialNumber: _ocrResult?.collectionNumber,
           initialImage: _capturedImage,
@@ -401,42 +384,46 @@ class _ScannerViewState extends State<ScannerView> {
     }
   }
 
-  // ──────────────────────────────────────────────────────────────────────────
-  // Parser de búsqueda manual tolerante a comillas, prefijos y referencias.
-  // ──────────────────────────────────────────────────────────────────────────
   (String, String?) _parseManualQuery(String input) {
     var clean = input.replaceAll(RegExp(r'["״“”«»' "'" r']'), ' ').trim();
 
-    clean = clean.replaceAll(
-      RegExp(
-        r'\b(pok[eé]mon\s+)?(b[aá]sico|g[aá]sico|c[aá]sico|p[aá]sico|fase\s*\d*|stage\s*\d*|basic)\b',
-        caseSensitive: false,
-      ),
-      ' ',
-    ).replaceAll(
-      RegExp(r'(たね|1進化|2進化|기본|1진화|2진화|基础|1阶进化|2阶进化)'),
-      ' ',
-    ).trim();
+    clean = clean
+        .replaceAll(
+          RegExp(
+            r'\b(pok[eé]mon\s+)?(b[aá]sico|g[aá]sico|c[aá]sico|p[aá]sico|fase\s*\d*|stage\s*\d*|basic)\b',
+            caseSensitive: false,
+          ),
+          ' ',
+        )
+        .replaceAll(
+          RegExp(r'(たね|1進化|2進化|기본|1진화|2진화|基础|1阶进化|2阶进化)'),
+          ' ',
+        )
+        .trim();
 
-    // 1. Buscar número de colección con prefijo opcional (ej: "TG14/TG30", "GG54/GG70", "TG14/30", "pfl 113/094", "113/094")
-    final matchAlphaFraction = RegExp(r'\b([A-Za-z]{1,6})?(\d{1,4})/(?:[A-Za-z]{1,6})?(\d{1,4})\b').firstMatch(clean);
+    final matchAlphaFraction =
+        RegExp(r'\b([A-Za-z]{1,6})?(\d{1,4})/(?:[A-Za-z]{1,6})?(\d{1,4})\b')
+            .firstMatch(clean);
     if (matchAlphaFraction != null) {
       final prefix = matchAlphaFraction.group(1) ?? '';
       final numPart = matchAlphaFraction.group(2)!;
       final totalPart = matchAlphaFraction.group(3)!;
-      final fullNumber = prefix.isNotEmpty ? '$prefix$numPart/$totalPart' : '$numPart/$totalPart';
+      final fullNumber =
+          prefix.isNotEmpty ? '$prefix$numPart/$totalPart' : '$numPart/$totalPart';
       final name = clean.replaceFirst(matchAlphaFraction.group(0)!, '').trim();
       return (name, fullNumber);
     }
 
-    final matchFractionWithPrefixSpace = RegExp(r'\b([A-Za-z]{2,6})\s+(\d{1,4}/\d{1,4})\b').firstMatch(clean);
+    final matchFractionWithPrefixSpace =
+        RegExp(r'\b([A-Za-z]{2,6})\s+(\d{1,4}/\d{1,4})\b').firstMatch(clean);
     if (matchFractionWithPrefixSpace != null) {
-      final number = '${matchFractionWithPrefixSpace.group(1)} ${matchFractionWithPrefixSpace.group(2)}';
-      final name = clean.replaceFirst(matchFractionWithPrefixSpace.group(0)!, '').trim();
+      final number =
+          '${matchFractionWithPrefixSpace.group(1)} ${matchFractionWithPrefixSpace.group(2)}';
+      final name =
+          clean.replaceFirst(matchFractionWithPrefixSpace.group(0)!, '').trim();
       return (name, number);
     }
 
-    // 2. Buscar código con guion tipo set TCG (ej: "SV5K-005", "ST1-03", "OP01-025", "LOB-005")
     final matchSetCode = RegExp(
             r'\b([A-Za-z0-9]{2,6}[A-Za-z0-9\.\-]*\s*[-–]\s*\d{1,4})\b')
         .firstMatch(clean);
@@ -446,7 +433,6 @@ class _ScannerViewState extends State<ScannerView> {
       return (name, code);
     }
 
-    // 3. Buscar número individual al final (ej: "Ho-Oh 140", "Agumon 03")
     final matchSingle =
         RegExp(r'^(.*?)(?:#|\s+)(\d{1,4})\s*$').firstMatch(clean);
     if (matchSingle != null && matchSingle.group(1)!.trim().isNotEmpty) {
@@ -455,7 +441,6 @@ class _ScannerViewState extends State<ScannerView> {
       return (name, number);
     }
 
-    // 4. Si es solo un número o código de referencia (ej: "140", "#140", "46986414")
     final numberOnlyMatch = RegExp(
       r'^(?:#|n[oº°]\.?\s*)?(\d{1,8}(?:/\d{1,4})?)$',
       caseSensitive: false,
@@ -475,140 +460,449 @@ class _ScannerViewState extends State<ScannerView> {
   }
 
   // ──────────────────────────────────────────────────────────────────────────
-  // BUILD
+  // MODALES DE "VER EN EL MERCADO", "ANALIZAR ESTADÍSTICAS" Y "AJUSTES"
+  // ──────────────────────────────────────────────────────────────────────────
+  void _showMarketSheet(PokemonCard card) {
+    final avg = card.cardmarketPrices?.averageSellPrice;
+    final trend = card.cardmarketPrices?.trendPrice;
+    final psa10 = card.psa10Price ?? (avg != null ? avg * 4.5 : null);
+    final queryText = '${card.name} ${card.number} ${card.setName}'.trim();
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF0E1A32),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Center(
+              child: Container(
+                width: 42,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                const Icon(Icons.shopping_cart_checkout_rounded,
+                    color: AppTheme.cyanAccent, size: 24),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Mercado • ${card.name}',
+                    style: GoogleFonts.outfit(
+                      color: Colors.white,
+                      fontSize: 19,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                GameBadge(game: card.game, language: card.language),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              card.setName.isNotEmpty
+                  ? '${card.setName} • #${card.number}'
+                  : 'Referencia #${card.number}',
+              style: GoogleFonts.inter(color: Colors.white60, fontSize: 13),
+            ),
+            const SizedBox(height: 18),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: AppTheme.glassDecoration(radius: 16),
+              child: Column(
+                children: [
+                  _MarketMetricRow(
+                    label: 'Cardmarket (Precio Medio)',
+                    value: avg != null
+                        ? '${avg.toStringAsFixed(2)} €'
+                        : 'Sin cotización reciente',
+                    valueColor: AppTheme.primary,
+                  ),
+                  const Divider(color: Colors.white12, height: 18),
+                  _MarketMetricRow(
+                    label: 'Tendencia de Mercado (Trend)',
+                    value: trend != null
+                        ? '${trend.toStringAsFixed(2)} €'
+                        : 'Sin datos',
+                    valueColor: AppTheme.neonGreen,
+                  ),
+                  const Divider(color: Colors.white12, height: 18),
+                  _MarketMetricRow(
+                    label: 'Estimación PSA 10 / Graduada',
+                    value: psa10 != null
+                        ? '~${psa10.toStringAsFixed(2)} €'
+                        : 'No disponible',
+                    valueColor: AppTheme.cyanAccent,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            NeonPillButton(
+              label: 'Copiar referencia para Cardmarket / eBay',
+              icon: Icons.copy_rounded,
+              style: NeonButtonStyle.blue,
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: queryText));
+                Navigator.pop(ctx);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Referencia copiada: "$queryText"'),
+                  ),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showStatsSheet(PokemonCard card) {
+    final avg = card.cardmarketPrices?.averageSellPrice ??
+        card.cardmarketPrices?.trendPrice;
+    final visualScore = _visualScores[card.id];
+    final setTotal = card.setPrintedTotal ?? card.setTotal;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF0E1A32),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Center(
+              child: Container(
+                width: 42,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                const Icon(Icons.bar_chart_rounded,
+                    color: AppTheme.neonGreen, size: 24),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Estadísticas y Ficha Técnica',
+                    style: GoogleFonts.outfit(
+                      color: Colors.white,
+                      fontSize: 19,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: AppTheme.glassDecoration(radius: 16),
+              child: Column(
+                children: [
+                  _MarketMetricRow(
+                    label: 'ID Oficial Catálogo',
+                    value: card.id,
+                    valueColor: Colors.white,
+                  ),
+                  const Divider(color: Colors.white12, height: 16),
+                  _MarketMetricRow(
+                    label: 'Colección / Set',
+                    value:
+                        card.setName.isNotEmpty ? card.setName : 'Pokémon TCG',
+                    valueColor: AppTheme.cyanAccent,
+                  ),
+                  const Divider(color: Colors.white12, height: 16),
+                  _MarketMetricRow(
+                    label: 'Numeración en el Set',
+                    value: setTotal != null
+                        ? '#${card.number} de $setTotal cartas'
+                        : '#${card.number}',
+                    valueColor: AppTheme.primary,
+                  ),
+                  if (visualScore != null) ...[
+                    const Divider(color: Colors.white12, height: 16),
+                    _MarketMetricRow(
+                      label: 'Precisión Visual IA (dHash + Color)',
+                      value: '$visualScore% de coincidencia',
+                      valueColor: AppTheme.neonGreen,
+                    ),
+                  ],
+                  if (avg != null) ...[
+                    const Divider(color: Colors.white12, height: 16),
+                    _MarketMetricRow(
+                      label: 'Rango Estimado (NM - Mint)',
+                      value:
+                          '${(avg * 0.85).toStringAsFixed(2)} € – ${(avg * 1.25).toStringAsFixed(2)} €',
+                      valueColor: Colors.white,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            NeonPillButton(
+              label: 'Personalizar Estado / Graduación (PSA/BGS)',
+              icon: Icons.workspace_premium_rounded,
+              style: NeonButtonStyle.darkStats,
+              onPressed: () {
+                Navigator.pop(ctx);
+                _openManualEntry(cardToEdit: card);
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showSettingsSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF0E1A32),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setModalState) => Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Center(
+                child: Container(
+                  width: 42,
+                  height: 4,
+                  decoration: BoxDecoration(
+                    color: Colors.white24,
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Ajustes del Escáner Pokémon',
+                style: GoogleFonts.outfit(
+                  color: Colors.white,
+                  fontSize: 19,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Selecciona el idioma prioritario para el reconocimiento OCR y el catálogo:',
+                style: GoogleFonts.inter(color: Colors.white60, fontSize: 12.5),
+              ),
+              const SizedBox(height: 14),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: CardLanguage.values.map((lang) {
+                  final isSelected = _selectedLanguage == lang;
+                  return ChoiceChip(
+                    label: Text(
+                      lang.label,
+                      style: GoogleFonts.outfit(
+                        color: isSelected ? Colors.black : Colors.white,
+                        fontWeight:
+                            isSelected ? FontWeight.bold : FontWeight.w500,
+                      ),
+                    ),
+                    selected: isSelected,
+                    selectedColor: AppTheme.cyanAccent,
+                    backgroundColor: const Color(0xFF162647),
+                    onSelected: (sel) {
+                      if (sel) {
+                        setState(() => _selectedLanguage = lang);
+                        setModalState(() {});
+                        if (_manualSearchController.text.trim().isNotEmpty) {
+                          _onManualSearch();
+                        }
+                      }
+                    },
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 18),
+              NeonPillButton(
+                label: 'Añadir Carta Manualmente',
+                icon: Icons.edit_note_rounded,
+                style: NeonButtonStyle.darkStats,
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  _openManualEntry();
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // BUILD PRINCIPAL (DISEÑO POKÉMON TCG SCANNER HUD)
   // ──────────────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppTheme.bgDark,
-      appBar: AppBar(
-        title: Text('Escanear o Buscar Carta Pokémon',
-            style: GoogleFonts.outfit(color: Colors.white, fontSize: 19, fontWeight: FontWeight.bold)),
-        iconTheme: const IconThemeData(color: Colors.white),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.edit_note_rounded, color: AppTheme.primary),
-            tooltip: 'Añadir datos manualmente',
-            onPressed: _openManualEntry,
-          ),
-        ],
-      ),
+      extendBody: true,
       body: Container(
         decoration: const BoxDecoration(
           gradient: AppTheme.bgGradient,
         ),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(16),
+        child: SafeArea(
+          bottom: false,
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-            // ── Selector de Idioma (para todas las colecciones Pokémon) ────
-            _buildLanguageSelector(),
-            const SizedBox(height: 12),
+              // ── 1. Barra de búsqueda redondeada superior + Cabecera ─────────
+              _buildTopSearchAndHeader(),
 
-            // ── Cámara / Foto de la carta ─────────────────────────────────
-            _buildImagePreview(),
-
-            const SizedBox(height: 14),
-
-            // ── Buscador manual con sugerencias rápidas ───────────────────
-            _buildManualInput(),
-
-            const SizedBox(height: 14),
-
-            // ── Indicador de carga ────────────────────────────────────────
-            if (_isProcessing) ...[
-              const Center(
-                child: Padding(
-                  padding: EdgeInsets.all(16.0),
+              // ── 2. Cuerpo desplazable con el Visor Neón y Resultados ───────
+              Expanded(
+                child: SingleChildScrollView(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
                   child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
-                      CircularProgressIndicator(color: Colors.amber),
-                      SizedBox(height: 10),
-                      Text('Consultando bases de datos TCG...',
-                          style: TextStyle(color: Colors.white70)),
+                      // Logo "Pokémon TCG SCANNER" con botones laterales Ajustes / Colección
+                      _buildLogoHeaderRow(),
+
+                      const SizedBox(height: 8),
+
+                      // Indicador de estado ("Escaneando...", selector de idioma rápido)
+                      _buildScannerStatusText(),
+
+                      const SizedBox(height: 10),
+
+                      // ── VISOR CENTRAL NEÓN HUD ──────────────────────────────
+                      _buildHudViewfinder(),
+
+                      const SizedBox(height: 12),
+
+                      // Botones rápidos de Cámara / Galería y Chips de prueba
+                      _buildQuickCameraAndChipsBar(),
+
+                      const SizedBox(height: 14),
+
+                      // ── Mensaje de error si ocurrió alguno ──────────────────
+                      if (_errorMessage != null && !_isProcessing)
+                        _buildErrorBanner(_errorMessage!),
+
+                      // ── TARJETA PRINCIPAL DE CARTA DETECTADA (3 Botones Neón)
+                      if (_selectedCard != null && !_isProcessing) ...[
+                        _buildScannerResultCard(_selectedCard!),
+                        const SizedBox(height: 16),
+                      ],
+
+                      // ── Otras versiones / candidatas encontradas ────────────
+                      if (_searchResults.length > 1 && !_isProcessing)
+                        _buildCandidatesList(),
+
+                      const SizedBox(height: 110),
                     ],
                   ),
                 ),
               ),
             ],
-
-            // ── Mensaje de error / Opción de crear a mano ─────────────────
-            if (_errorMessage != null && !_isProcessing)
-              _buildErrorBanner(_errorMessage!),
-
-            // ── Info de lo que detectó el OCR ─────────────────────────────
-            if (_ocrResult != null && !_isProcessing)
-              _buildOcrInfo(),
-
-            // ── Confirmación de carta seleccionada ────────────────────────
-            if (_selectedCard != null && !_isProcessing) ...[
-              _buildConfirmation(),
-              const SizedBox(height: 20),
-            ],
-
-            // ── Lista de resultados para elegir con imagen ────────────────
-            if (_searchResults.isNotEmpty && !_isProcessing)
-              _buildResultsList(),
-
-            // Espacio final generoso para que nada quede cortado al hacer scroll
-            const SizedBox(height: 60),
-          ],
+          ),
         ),
       ),
+      bottomNavigationBar: PokeballBottomBar(
+        selectedIndex: 0,
+        onCenterScanTap: () => _captureImage(ImageSource.camera),
+        onTabSelected: (index) {
+          if (index == 0) {
+            _captureImage(ImageSource.camera);
+          } else {
+            Navigator.of(context).pop(index);
+          }
+        },
       ),
     );
   }
 
-  // ── Selector de Idioma ────────────────────────────────────────────────────
-  Widget _buildLanguageSelector() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: const Color(0xFF16213E),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.white12),
-      ),
+  // ── Barra de búsqueda píldora superior (como en la pantalla izquierda) ─────
+  Widget _buildTopSearchAndHeader() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
       child: Row(
         children: [
-          const Icon(Icons.language, color: Colors.white60, size: 16),
-          const SizedBox(width: 8),
-          const Text('Idioma:',
-              style: TextStyle(color: Colors.white70, fontSize: 12)),
-          const SizedBox(width: 8),
+          IconButton(
+            onPressed: () => Navigator.of(context).pop(),
+            icon: const Icon(Icons.arrow_back_ios_new_rounded,
+                color: Colors.white70, size: 20),
+            tooltip: 'Volver al álbum',
+          ),
           Expanded(
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: CardLanguage.values.map((lang) {
-                  final isSelected = _selectedLanguage == lang;
-                  return Padding(
-                    padding: const EdgeInsets.only(right: 6),
-                    child: ChoiceChip(
-                      label: Text(
-                        lang.label,
-                        style: TextStyle(
-                          color: isSelected ? Colors.black : Colors.white70,
-                          fontSize: 11,
-                          fontWeight:
-                              isSelected ? FontWeight.bold : FontWeight.normal,
+            child: Container(
+              height: 42,
+              decoration: BoxDecoration(
+                color: const Color(0xFF13203B).withValues(alpha: 0.9),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.28),
+                  width: 1.1,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: AppTheme.cyanAccent.withValues(alpha: 0.1),
+                    blurRadius: 12,
+                  ),
+                ],
+              ),
+              child: TextField(
+                controller: _manualSearchController,
+                style: GoogleFonts.inter(color: Colors.white, fontSize: 13.5),
+                textInputAction: TextInputAction.search,
+                onSubmitted: (_) => _onManualSearch(),
+                decoration: InputDecoration(
+                  hintText: 'Buscar Charizard, 140/195, s8a 001/028...',
+                  hintStyle:
+                      GoogleFonts.inter(color: Colors.white38, fontSize: 12.5),
+                  prefixIcon: const Icon(Icons.search_rounded,
+                      color: Colors.white70, size: 20),
+                  suffixIcon: _manualSearchController.text.isNotEmpty
+                      ? IconButton(
+                          icon: const Icon(Icons.clear_rounded,
+                              color: Colors.white54, size: 17),
+                          onPressed: () {
+                            setState(() => _manualSearchController.clear());
+                          },
+                        )
+                      : IconButton(
+                          icon: const Icon(Icons.arrow_forward_rounded,
+                              color: AppTheme.cyanAccent, size: 18),
+                          onPressed: () => _onManualSearch(),
                         ),
-                      ),
-                      selected: isSelected,
-                      selectedColor: Colors.amber,
-                      backgroundColor: const Color(0xFF0F3460),
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                      onSelected: (selected) {
-                        if (selected) {
-                          setState(() => _selectedLanguage = lang);
-                          if (_manualSearchController.text.trim().isNotEmpty) {
-                            _onManualSearch();
-                          }
-                        }
-                      },
-                    ),
-                  );
-                }).toList(),
+                  border: InputBorder.none,
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                ),
               ),
             ),
           ),
@@ -617,439 +911,731 @@ class _ScannerViewState extends State<ScannerView> {
     );
   }
 
-  Widget _buildImagePreview() {
-    return Column(
+  // ── Fila con Ajustes + Logo Pokémon TCG SCANNER + Colección ────────────────
+  Widget _buildLogoHeaderRow() {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        GestureDetector(
-          onTap: () => _captureImage(ImageSource.camera),
-          child: Container(
-            height: 160,
-            decoration: BoxDecoration(
-              color: const Color(0xFF0F3460),
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(
-                color: Colors.amber.withValues(alpha: 0.4),
-                width: 1.5,
-              ),
-            ),
-            child: _capturedImage != null
-                ? ClipRRect(
-                    borderRadius: BorderRadius.circular(15),
-                    child: Image.file(_capturedImage!, fit: BoxFit.cover),
-                  )
-                : const Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.camera_alt, color: Colors.amber, size: 40),
-                      SizedBox(height: 8),
-                      Text('Toma una foto a cualquier carta TCG',
-                          style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 14,
-                              fontWeight: FontWeight.bold),
-                          textAlign: TextAlign.center),
-                      SizedBox(height: 4),
-                      Text(
-                          'Toca aquí para abrir la cámara o elige de tu galería abajo',
-                          style: TextStyle(color: Colors.white54, fontSize: 11),
-                          textAlign: TextAlign.center),
-                    ],
-                  ),
+        _HeaderIconAction(
+          icon: Icons.settings_outlined,
+          label: 'Ajustes',
+          onTap: _showSettingsSheet,
+        ),
+        const Expanded(
+          child: Center(
+            child: PokemonScannerLogo(scale: 0.95),
           ),
         ),
-        const SizedBox(height: 8),
-        Row(
-          children: [
-            Expanded(
-              child: ElevatedButton.icon(
-                onPressed: () => _captureImage(ImageSource.camera),
-                icon: const Icon(Icons.camera_alt, size: 16),
-                label: const Text('Hacer Foto',
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.amber,
-                  foregroundColor: Colors.black,
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10)),
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: OutlinedButton.icon(
-                onPressed: () => _captureImage(ImageSource.gallery),
-                icon: const Icon(Icons.photo_library,
-                    size: 16, color: Colors.white70),
-                label: const Text('Desde Galería',
-                    style: TextStyle(fontSize: 12, color: Colors.white70)),
-                style: OutlinedButton.styleFrom(
-                  side: const BorderSide(color: Colors.white24),
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(10)),
-                ),
-              ),
-            ),
-          ],
+        _HeaderIconAction(
+          icon: Icons.style_outlined,
+          label: 'Colección',
+          onTap: () => Navigator.of(context).pop(),
         ),
       ],
     );
   }
 
-  Widget _buildManualInput() {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF16213E),
-        borderRadius: BorderRadius.circular(14),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Row(
-            children: [
-              Icon(Icons.search, color: Colors.amber, size: 20),
-              SizedBox(width: 8),
-              Text(
-                'Búsqueda por nombre o referencia',
-                style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 15,
-                    fontWeight: FontWeight.bold),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          const Text(
-            'Nombre ("Charizard ex", "Ho-Oh"), fracción ("113/094") o código ("TG14/TG30", "s8a 001/028"):',
-            style: TextStyle(color: Colors.white60, fontSize: 12),
-          ),
-          const SizedBox(height: 10),
-          TextField(
-            controller: _manualSearchController,
-            style: const TextStyle(color: Colors.white),
-            decoration: InputDecoration(
-              hintText: 'Ej: Charizard ex, Pikachu, 140/195, TG14/TG30, s8a 001/028...',
-              hintStyle: const TextStyle(color: Colors.white38),
-              filled: true,
-              fillColor: const Color(0xFF0F3460),
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(10),
-                borderSide: BorderSide.none,
-              ),
-              suffixIcon: IconButton(
-                icon: const Icon(Icons.arrow_forward, color: Colors.amber),
-                onPressed: () => _onManualSearch(),
+  Widget _buildScannerStatusText() {
+    if (_isProcessing) {
+      return Text(
+        'Escaneando... 87%',
+        style: GoogleFonts.outfit(
+          color: Colors.white,
+          fontSize: 14,
+          fontWeight: FontWeight.w600,
+          letterSpacing: 0.5,
+          shadows: [
+            Shadow(
+              color: AppTheme.cyanAccent.withValues(alpha: 0.7),
+              blurRadius: 10,
+            ),
+          ],
+        ),
+      );
+    }
+
+    if (_isMatchingImages) {
+      return Text(
+        'Comparando holografía y arte de la carta...',
+        style: GoogleFonts.outfit(
+          color: AppTheme.neonGreen,
+          fontSize: 13,
+          fontWeight: FontWeight.w600,
+        ),
+      );
+    }
+
+    return GestureDetector(
+      onTap: _showSettingsSheet,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        decoration: BoxDecoration(
+          color: const Color(0xFF122240),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: Colors.white12),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.language_rounded,
+                size: 13, color: AppTheme.cyanAccent),
+            const SizedBox(width: 5),
+            Text(
+              'Idioma OCR: ${_selectedLanguage.label}',
+              style: GoogleFonts.outfit(
+                color: Colors.white70,
+                fontSize: 11.5,
+                fontWeight: FontWeight.w600,
               ),
             ),
-            onSubmitted: (_) => _onManualSearch(),
-          ),
-          const SizedBox(height: 10),
+          ],
+        ),
+      ),
+    );
+  }
 
-          // Chips de búsqueda rápida de Pokémon TCG
-          Wrap(
-            spacing: 6,
-            runSpacing: 4,
+  // ── Visor Central NeonScannerFrame con imagen y etiqueta lateral HUD ───────
+  Widget _buildHudViewfinder() {
+    final card = _selectedCard;
+    final price = card?.cardmarketPrices?.averageSellPrice ??
+        card?.cardmarketPrices?.trendPrice;
+
+    final String? calloutTitle = card?.name ?? _ocrResult?.pokemonName;
+    final String? calloutSubtitle = price != null
+        ? 'Est. ${price.toStringAsFixed(2)} €'
+        : (card != null
+            ? '#${card.number}'
+            : _ocrResult?.collectionNumber);
+    final String? calloutBadge = card?.language?.toUpperCase() ??
+        (_ocrResult?.detectedLanguage != null &&
+                _ocrResult!.detectedLanguage != CardLanguage.auto
+            ? _ocrResult!.detectedLanguage.apiCode.toUpperCase()
+            : null);
+
+    Widget previewContent;
+    if (_capturedImage != null) {
+      previewContent = Image.file(
+        _capturedImage!,
+        fit: BoxFit.cover,
+        width: double.infinity,
+        height: double.infinity,
+      );
+    } else if (card != null && PokemonCard.isValidNetworkUrl(card.imageUrl)) {
+      previewContent = CachedNetworkImage(
+        imageUrl: card.imageUrl,
+        fit: BoxFit.contain,
+        placeholder: (_, __) => const Center(
+          child: CircularProgressIndicator(color: AppTheme.cyanAccent),
+        ),
+        errorWidget: (_, __, ___) => _buildEmptyViewfinderContent(),
+      );
+    } else {
+      previewContent = _buildEmptyViewfinderContent();
+    }
+
+    return NeonScannerFrame(
+      width: 215,
+      height: 298,
+      isScanning: _isProcessing || _isMatchingImages,
+      showLaser: _capturedImage != null || card != null || _isProcessing,
+      calloutTitle: calloutTitle,
+      calloutSubtitle: calloutSubtitle,
+      calloutBadge: calloutBadge,
+      onTap: () => _captureImage(ImageSource.camera),
+      child: previewContent,
+    );
+  }
+
+  Widget _buildEmptyViewfinderContent() {
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(0xFF0F2142),
+            Color(0xFF091326),
+          ],
+        ),
+      ),
+      padding: const EdgeInsets.all(18),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: AppTheme.cyanAccent.withValues(alpha: 0.12),
+              border: Border.all(
+                color: AppTheme.cyanAccent.withValues(alpha: 0.45),
+                width: 1.5,
+              ),
+            ),
+            child: const Icon(
+              Icons.camera_alt_rounded,
+              color: AppTheme.cyanAccent,
+              size: 38,
+            ),
+          ),
+          const SizedBox(height: 14),
+          Text(
+            'Toca para Escanear Carta',
+            textAlign: TextAlign.center,
+            style: GoogleFonts.outfit(
+              color: Colors.white,
+              fontSize: 15,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Reconocimiento instantáneo en 15 idiomas y 508 colecciones Pokémon',
+            textAlign: TextAlign.center,
+            style: GoogleFonts.inter(
+              color: Colors.white60,
+              fontSize: 11,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildQuickCameraAndChipsBar() {
+    return Column(
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            _MiniHudButton(
+              icon: Icons.camera_alt_rounded,
+              label: 'Cámara',
+              color: AppTheme.cyanAccent,
+              onTap: () => _captureImage(ImageSource.camera),
+            ),
+            const SizedBox(width: 10),
+            _MiniHudButton(
+              icon: Icons.photo_library_rounded,
+              label: 'Galería',
+              color: AppTheme.primary,
+              onTap: () => _captureImage(ImageSource.gallery),
+            ),
+            const SizedBox(width: 10),
+            _MiniHudButton(
+              icon: Icons.edit_note_rounded,
+              label: 'Manual',
+              color: AppTheme.neonGreen,
+              onTap: () => _openManualEntry(),
+            ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
             children: [
-              _buildQuickChip('Ho-Oh 140/195'),
               _buildQuickChip('Charizard ex'),
+              _buildQuickChip('Ho-Oh 140/195'),
               _buildQuickChip('Pikachu TG05/TG30'),
               _buildQuickChip('s8a 001/028'),
               _buildQuickChip('113/094'),
             ],
           ),
-
-          const SizedBox(height: 12),
-
-          OutlinedButton.icon(
-            onPressed: _openManualEntry,
-            icon: const Icon(Icons.edit_note, color: Colors.amber, size: 18),
-            label: const Text(
-              '¿Prefieres meter todos los datos a mano? Pulsa aquí ✍️',
-              style: TextStyle(color: Colors.amber, fontSize: 12),
-            ),
-            style: OutlinedButton.styleFrom(
-              side: BorderSide(color: Colors.amber.withValues(alpha: 0.4)),
-              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(10),
-              ),
-            ),
-          ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
   Widget _buildQuickChip(String label) {
-    return ActionChip(
-      avatar: const Icon(Icons.catching_pokemon, size: 14, color: Colors.amber),
-      label: Text(label,
-          style: const TextStyle(color: Colors.white70, fontSize: 11)),
-      backgroundColor: const Color(0xFF0F3460),
-      side: BorderSide(color: Colors.amber.withValues(alpha: 0.4)),
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      onPressed: () => _onManualSearch(label),
+    return Padding(
+      padding: const EdgeInsets.only(right: 6),
+      child: ActionChip(
+        avatar: const Icon(Icons.catching_pokemon,
+            size: 13, color: AppTheme.primary),
+        label: Text(
+          label,
+          style: GoogleFonts.outfit(color: Colors.white70, fontSize: 11),
+        ),
+        backgroundColor: const Color(0xFF11203D),
+        side: BorderSide(color: AppTheme.cyanAccent.withValues(alpha: 0.3)),
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 0),
+        onPressed: () => _onManualSearch(label),
+      ),
     );
   }
 
-  Widget _buildOcrInfo() {
+  // ──────────────────────────────────────────────────────────────────────────
+  // TARJETA DE RESULTADO ESTILO IMAGEN DE REFERENCIA
+  // Soporta vista con miniatura lateral (izquierda/centro de la imagen) y
+  // vista expandida con "Est. €120.00" gigante (derecha de la imagen).
+  // ──────────────────────────────────────────────────────────────────────────
+  Widget _buildScannerResultCard(PokemonCard card) {
+    final price = card.cardmarketPrices?.averageSellPrice ??
+        card.cardmarketPrices?.trendPrice;
+    final priceLabel = price != null
+        ? 'Est. ${price.toStringAsFixed(2)} €'
+        : 'Est. Consultar';
+    final setSubtitle = card.setName.isNotEmpty
+        ? '${card.setName} • #${card.number}'
+        : 'Rareza / Ref #${card.number}';
+
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(12),
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.green.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.green.withValues(alpha: 0.3)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text('Texto detectado por OCR:',
-              style: TextStyle(
-                  color: Colors.greenAccent, fontWeight: FontWeight.bold)),
-          if (_ocrResult!.pokemonName != null)
-            Text('Nombre: ${_ocrResult!.pokemonName}',
-                style: const TextStyle(color: Colors.white70, fontSize: 13)),
-          if (_ocrResult!.collectionNumber != null)
-            Text('Referencia: ${_ocrResult!.collectionNumber}',
-                style: const TextStyle(color: Colors.white70, fontSize: 13)),
-          if (_ocrResult!.detectedLanguage != CardLanguage.auto)
-            Padding(
-              padding: const EdgeInsets.only(top: 4.0),
-              child: Text(
-                'Idioma: ${_ocrResult!.detectedLanguage.label}',
-                style: const TextStyle(
-                    color: Colors.amber,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600),
-              ),
-            ),
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(0xF215233E),
+            Color(0xF50C1528),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(
+          color: AppTheme.cyanAccent.withValues(alpha: 0.45),
+          width: 1.4,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.65),
+            blurRadius: 24,
+            offset: const Offset(0, 10),
+          ),
+          BoxShadow(
+            color: AppTheme.cyanAccent.withValues(alpha: 0.12),
+            blurRadius: 18,
+          ),
         ],
       ),
+      child: _expandedHeroCard
+          ? _buildExpandedHeroCardContent(card, setSubtitle, priceLabel)
+          : _buildSplitCardContent(card, setSubtitle, priceLabel),
+    );
+  }
+
+  /// Diseño Pantallas 1 y 2: Miniatura de carta a la izquierda + 3 botones neón a la derecha
+  Widget _buildSplitCardContent(
+    PokemonCard card,
+    String setSubtitle,
+    String priceLabel,
+  ) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        // Imagen de la carta a la izquierda
+        GestureDetector(
+          onTap: () => setState(() => _expandedHeroCard = true),
+          child: Container(
+            width: 108,
+            height: 152,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: AppTheme.primary.withValues(alpha: 0.7),
+                width: 1.5,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: AppTheme.primary.withValues(alpha: 0.2),
+                  blurRadius: 12,
+                ),
+              ],
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: _buildCardImageWidget(card, useFullRes: true),
+            ),
+          ),
+        ),
+        const SizedBox(width: 14),
+        // Columna derecha con Título, Rareza/Set, Precio Dorado y los 3 Botones Píldora
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      card.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: GoogleFonts.outfit(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    icon: const Icon(
+                      Icons.open_in_full_rounded,
+                      color: Colors.white54,
+                      size: 16,
+                    ),
+                    tooltip: 'Ampliar tarjeta de precio',
+                    onPressed: () =>
+                        setState(() => _expandedHeroCard = !_expandedHeroCard),
+                  ),
+                ],
+              ),
+              Text(
+                setSubtitle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: GoogleFonts.inter(
+                  color: Colors.white70,
+                  fontSize: 12,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                priceLabel,
+                style: GoogleFonts.outfit(
+                  color: AppTheme.primary,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                  shadows: [
+                    Shadow(
+                      color: AppTheme.primary.withValues(alpha: 0.45),
+                      blurRadius: 10,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
+              NeonPillButton(
+                label: 'Añadir a mi Colección',
+                style: NeonButtonStyle.green,
+                compact: true,
+                onPressed: _isProcessing ? null : _saveCard,
+              ),
+              const SizedBox(height: 8),
+              NeonPillButton(
+                label: 'Ver en el Mercado',
+                style: NeonButtonStyle.blue,
+                compact: true,
+                onPressed: () => _showMarketSheet(card),
+              ),
+              const SizedBox(height: 8),
+              NeonPillButton(
+                label: 'Analizar Estadísticas',
+                icon: Icons.bar_chart_rounded,
+                style: NeonButtonStyle.darkStats,
+                compact: true,
+                onPressed: () => _showStatsSheet(card),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Diseño Pantalla 3: Vista Hero Centrada con "Est. €120.00" gigante y 3 botones grandes
+  Widget _buildExpandedHeroCardContent(
+    PokemonCard card,
+    String setSubtitle,
+    String priceLabel,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            GameBadge(game: card.game, language: card.language),
+            IconButton(
+              visualDensity: VisualDensity.compact,
+              icon: const Icon(Icons.close_fullscreen_rounded,
+                  color: Colors.white54, size: 18),
+              tooltip: 'Vista compacta con miniatura',
+              onPressed: () => setState(() => _expandedHeroCard = false),
+            ),
+          ],
+        ),
+        Text(
+          card.name,
+          textAlign: TextAlign.center,
+          style: GoogleFonts.outfit(
+            color: Colors.white,
+            fontSize: 25,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          setSubtitle,
+          textAlign: TextAlign.center,
+          style: GoogleFonts.inter(
+            color: Colors.white70,
+            fontSize: 13.5,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          priceLabel,
+          textAlign: TextAlign.center,
+          style: GoogleFonts.outfit(
+            color: AppTheme.primary,
+            fontSize: 29,
+            fontWeight: FontWeight.w900,
+            shadows: [
+              Shadow(
+                color: AppTheme.primary.withValues(alpha: 0.55),
+                blurRadius: 14,
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 14),
+        NeonPillButton(
+          label: 'Añadir a mi Colección',
+          style: NeonButtonStyle.green,
+          onPressed: _isProcessing ? null : _saveCard,
+        ),
+        const SizedBox(height: 10),
+        NeonPillButton(
+          label: 'Ver en el Mercado',
+          style: NeonButtonStyle.blue,
+          onPressed: () => _showMarketSheet(card),
+        ),
+        const SizedBox(height: 10),
+        NeonPillButton(
+          label: 'Analizar Estadísticas',
+          icon: Icons.bar_chart_rounded,
+          style: NeonButtonStyle.darkStats,
+          onPressed: () => _showStatsSheet(card),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCardImageWidget(PokemonCard card, {bool useFullRes = false}) {
+    if (PokemonCard.isValidNetworkUrl(card.imageUrl)) {
+      return CachedNetworkImage(
+        imageUrl: useFullRes ? card.imageUrl : card.thumbnailImageUrl,
+        fit: BoxFit.cover,
+        memCacheWidth: useFullRes ? 450 : 180,
+        placeholder: (_, __) => Container(
+          color: Colors.black26,
+          child: const Center(
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: AppTheme.cyanAccent,
+            ),
+          ),
+        ),
+        errorWidget: (_, __, ___) => Container(
+          color: Colors.black26,
+          child: const Icon(Icons.catching_pokemon,
+              color: Colors.white38, size: 32),
+        ),
+      );
+    }
+    if (card.imageUrl.isNotEmpty && File(card.imageUrl).existsSync()) {
+      return Image.file(
+        File(card.imageUrl),
+        fit: BoxFit.cover,
+        cacheWidth: useFullRes ? 450 : 180,
+      );
+    }
+    if (_capturedImage != null) {
+      return Image.file(_capturedImage!, fit: BoxFit.cover);
+    }
+    return Container(
+      color: Colors.black26,
+      child:
+          const Icon(Icons.catching_pokemon, color: Colors.white38, size: 32),
+    );
+  }
+
+  // ── Lista de candidatas adicionales si hay más de 1 coincidencia ───────────
+  Widget _buildCandidatesList() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          child: Text(
+            'Otras ediciones encontradas (${_searchResults.length}):',
+            style: GoogleFonts.outfit(
+              color: Colors.white70,
+              fontSize: 13.5,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        ..._searchResults.map(
+          (card) => _ResultCard(
+            card: card,
+            isSelected: _selectedCard?.id == card.id,
+            visualScore: _visualScores[card.id],
+            onSelect: () => _selectCard(card),
+          ),
+        ),
+      ],
     );
   }
 
   Widget _buildErrorBanner(String message) {
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.orange.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: Colors.orange.withValues(alpha: 0.4)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(message,
-              style: const TextStyle(color: Colors.orangeAccent, fontSize: 13)),
-          const SizedBox(height: 8),
-          ElevatedButton.icon(
-            onPressed: _openManualEntry,
-            icon: const Icon(Icons.edit_note, size: 18),
-            label: const Text('Crear esta carta manualmente'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF0F3460),
-              foregroundColor: Colors.amber,
-              side: const BorderSide(color: Colors.amber),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ── Lista de cartas con imagen para que el usuario escoja ────────────────
-  Widget _buildResultsList() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Text(
-              '${_searchResults.length} cartas encontradas:',
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 15,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const Text(
-              'Toca una para elegirla',
-              style: TextStyle(color: Colors.amber, fontSize: 12),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-
-        if (_isMatchingImages) ...[
-          Container(
-            margin: const EdgeInsets.only(bottom: 10),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: Colors.amber.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.amber.withValues(alpha: 0.35)),
-            ),
-            child: const Row(
-              children: [
-                SizedBox(
-                  width: 14,
-                  height: 14,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: Colors.amber,
-                  ),
-                ),
-                SizedBox(width: 10),
-                Expanded(
-                  child: Text(
-                    '🎨 Comparando arte de ilustración con tu foto...',
-                    style: TextStyle(color: Colors.amber, fontSize: 12),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-
-        ..._searchResults.map((card) => _ResultCard(
-              card: card,
-              isSelected: _selectedCard?.id == card.id,
-              visualScore: _visualScores[card.id],
-              onSelect: () => _selectCard(card),
-            )),
-      ],
-    );
-  }
-
-  // ── Vista de confirmación de la carta seleccionada ─────────────────────────
-  Widget _buildConfirmation() {
-    final card = _selectedCard!;
-    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: const Color(0xFF16213E),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.green, width: 1.5),
+        color: AppTheme.loss.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.loss.withValues(alpha: 0.45)),
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
             children: [
-              const Icon(Icons.check_circle, color: Colors.green, size: 20),
-              const SizedBox(width: 8),
-              const Text(
-                'Carta seleccionada:',
-                style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 15,
-                    fontWeight: FontWeight.bold),
+              const Icon(Icons.error_outline_rounded, color: AppTheme.loss),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  message,
+                  style: GoogleFonts.inter(color: Colors.white, fontSize: 12.5),
+                ),
               ),
-              const Spacer(),
-              GameBadge(game: card.game, language: card.language),
             ],
           ),
-          const SizedBox(height: 12),
-
-          // Imagen grande de la carta
-          Center(
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: PokemonCard.isValidNetworkUrl(card.imageUrl)
-                  ? CachedNetworkImage(
-                      imageUrl: card.imageUrl,
-                      height: 220,
-                      memCacheWidth: 700,
-                      fit: BoxFit.contain,
-                      placeholder: (_, __) => const SizedBox(
-                        height: 220,
-                        child: Center(
-                            child:
-                                CircularProgressIndicator(color: Colors.amber)),
-                      ),
-                      errorWidget: (_, __, ___) => const Icon(
-                          Icons.broken_image,
-                          color: Colors.white38,
-                          size: 60),
-                    )
-                  : (card.imageUrl.isNotEmpty && File(card.imageUrl).existsSync()
-                      ? Image.file(File(card.imageUrl),
-                          height: 220, cacheWidth: 700, fit: BoxFit.contain)
-                      : const SizedBox(
-                          height: 220,
-                          child: Icon(Icons.image_not_supported,
-                              color: Colors.white38, size: 60),
-                        )),
-            ),
-          ),
-
-          const SizedBox(height: 12),
-
-          // Tabla de datos
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: const Color(0xFF0F3460),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Column(
-              children: [
-                _InfoRow(label: 'Nombre', value: card.name),
-                _InfoRow(label: 'Juego / TCG', value: card.game.label),
-                if (_visualScores.containsKey(card.id))
-                  _InfoRow(
-                    label: 'Coincidencia de arte',
-                    value: '🎨 ${_visualScores[card.id]}% de parecido visual',
-                  ),
-                if (card.setName.isNotEmpty)
-                  _InfoRow(label: 'Set / Colección', value: card.setName),
-                _InfoRow(
-                  label: 'Número de carta',
-                  value: card.setPrintedTotal != null
-                      ? '#${card.number} / ${card.setPrintedTotal}'
-                      : '#${card.number}',
-                ),
-                _InfoRow(
-                  label: 'Cardmarket (Precio medio)',
-                  value: card.cardmarketPrices?.averageSellPrice != null
-                      ? '${card.cardmarketPrices!.averageSellPrice!.toStringAsFixed(2)} €'
-                      : (card.cardmarketPrices?.trendPrice != null
-                          ? '${card.cardmarketPrices!.trendPrice!.toStringAsFixed(2)} €'
-                          : 'No disponible'),
-                ),
-                if (card.psa10Price != null)
-                  _InfoRow(
-                    label: 'PSA 10 (Estimado)',
-                    value: '${card.psa10Price!.toStringAsFixed(2)} €/\$',
-                  ),
-              ],
-            ),
-          ),
-
-          const SizedBox(height: 14),
-
-          ElevatedButton.icon(
-            onPressed: _isProcessing ? null : _saveCard,
-            icon: const Icon(Icons.bookmark_add),
-            label: const Text('Guardar en mi Álbum',
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.green,
-              foregroundColor: Colors.white,
-              padding: const EdgeInsets.symmetric(vertical: 14),
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10)),
-            ),
+          const SizedBox(height: 10),
+          NeonPillButton(
+            label: 'Introducir datos de la carta a mano',
+            icon: Icons.edit_note_rounded,
+            style: NeonButtonStyle.darkStats,
+            compact: true,
+            onPressed: _openManualEntry,
           ),
         ],
       ),
+    );
+  }
+}
+
+class _HeaderIconAction extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  const _HeaderIconAction({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: Colors.white, size: 22),
+            const SizedBox(height: 2),
+            Text(
+              label,
+              style: GoogleFonts.outfit(
+                color: Colors.white70,
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MiniHudButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _MiniHudButton({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(999),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.14),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(color: color.withValues(alpha: 0.55), width: 1.1),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 15, color: color),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: GoogleFonts.outfit(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MarketMetricRow extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color valueColor;
+
+  const _MarketMetricRow({
+    required this.label,
+    required this.value,
+    required this.valueColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Expanded(
+          child: Text(
+            label,
+            style: GoogleFonts.inter(color: Colors.white70, fontSize: 13),
+          ),
+        ),
+        Text(
+          value,
+          style: GoogleFonts.outfit(
+            color: valueColor,
+            fontSize: 14.5,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+      ],
     );
   }
 }
@@ -1070,18 +1656,20 @@ class _ResultCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      color: isSelected ? const Color(0xFF1E3A5F) : const Color(0xFF0F3460),
+    return Container(
       margin: const EdgeInsets.only(bottom: 8),
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(10),
-        side: BorderSide(
-          color: isSelected ? Colors.green : Colors.transparent,
-          width: 1.5,
+      decoration: BoxDecoration(
+        color: isSelected ? const Color(0xFF1A3158) : const Color(0xFF101E38),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: isSelected
+              ? AppTheme.neonGreen
+              : AppTheme.cyanAccent.withValues(alpha: 0.2),
+          width: isSelected ? 1.5 : 1.0,
         ),
       ),
       child: InkWell(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(14),
         onTap: onSelect,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -1092,43 +1680,32 @@ class _ResultCard extends StatelessWidget {
                 child: PokemonCard.isValidNetworkUrl(card.imageUrl)
                     ? CachedNetworkImage(
                         imageUrl: card.thumbnailImageUrl,
-                        width: 48,
-                        height: 68,
+                        width: 46,
+                        height: 64,
                         memCacheWidth: 150,
                         fit: BoxFit.cover,
                         placeholder: (_, __) => Container(
-                          width: 48,
-                          height: 68,
+                          width: 46,
+                          height: 64,
                           color: Colors.black26,
                         ),
                         errorWidget: (_, __, ___) => Container(
-                          width: 48,
-                          height: 68,
+                          width: 46,
+                          height: 64,
                           color: Colors.black26,
                           child: const Icon(Icons.broken_image,
                               color: Colors.white38, size: 20),
                         ),
                       )
-                    : (card.imageUrl.isNotEmpty &&
-                            File(card.imageUrl).existsSync()
-                        ? Image.file(
-                            File(card.imageUrl),
-                            width: 48,
-                            height: 68,
-                            cacheWidth: 150,
-                            fit: BoxFit.cover,
-                          )
-                        : Container(
-                            width: 48,
-                            height: 68,
-                            color: Colors.black26,
-                            child: const Icon(Icons.image,
-                                color: Colors.white38, size: 20),
-                          )),
+                    : Container(
+                        width: 46,
+                        height: 64,
+                        color: Colors.black26,
+                        child: const Icon(Icons.catching_pokemon,
+                            color: Colors.white38, size: 20),
+                      ),
               ),
-
               const SizedBox(width: 12),
-
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -1138,120 +1715,65 @@ class _ResultCard extends StatelessWidget {
                         Expanded(
                           child: Text(
                             card.name,
-                            style: const TextStyle(
+                            style: GoogleFonts.outfit(
                               color: Colors.white,
-                              fontSize: 14,
+                              fontSize: 14.5,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
                         ),
-                        if (visualScore != null && visualScore! > 0) ...[
+                        if (visualScore != null && visualScore! > 0)
                           Container(
                             padding: const EdgeInsets.symmetric(
                                 horizontal: 6, vertical: 2),
                             margin: const EdgeInsets.only(right: 6),
                             decoration: BoxDecoration(
-                              color: (visualScore! >= 65
-                                      ? Colors.green
-                                      : (visualScore! >= 45
-                                          ? Colors.orange
-                                          : Colors.blueGrey))
-                                  .withValues(alpha: 0.25),
-                              borderRadius: BorderRadius.circular(4),
+                              color: AppTheme.neonGreen.withValues(alpha: 0.18),
+                              borderRadius: BorderRadius.circular(6),
                               border: Border.all(
-                                color: visualScore! >= 65
-                                    ? Colors.greenAccent
-                                    : (visualScore! >= 45
-                                        ? Colors.orangeAccent
-                                        : Colors.white38),
+                                color: AppTheme.neonGreen,
                                 width: 0.8,
                               ),
                             ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Text('🎨 ', style: TextStyle(fontSize: 9)),
-                                Text(
-                                  '$visualScore%',
-                                  style: TextStyle(
-                                    color: visualScore! >= 65
-                                        ? Colors.greenAccent
-                                        : (visualScore! >= 45
-                                            ? Colors.orangeAccent
-                                            : Colors.white70),
-                                    fontSize: 9.5,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ],
+                            child: Text(
+                              '🎨 $visualScore%',
+                              style: GoogleFonts.outfit(
+                                color: AppTheme.neonGreen,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
                           ),
-                        ],
-                        GameBadge(game: card.game, language: card.language, fontSize: 9, iconSize: 11),
+                        GameBadge(
+                          game: card.game,
+                          language: card.language,
+                          fontSize: 9,
+                          iconSize: 11,
+                        ),
                       ],
                     ),
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 3),
                     Text(
                       card.setName.isNotEmpty
                           ? '${card.setName} • #${card.number}'
                           : 'Ref: #${card.number}',
-                      style: const TextStyle(
+                      style: GoogleFonts.inter(
                           color: Colors.white60, fontSize: 12),
                     ),
-                    if (card.cardmarketPrices?.averageSellPrice != null) ...[
-                      const SizedBox(height: 4),
-                      Text(
-                        'Cardmarket: ${card.cardmarketPrices!.averageSellPrice!.toStringAsFixed(2)} €',
-                        style: const TextStyle(
-                          color: Color(0xFF00B4D8),
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
                   ],
                 ),
               ),
-
-              const SizedBox(width: 8),
-
+              const SizedBox(width: 6),
               Icon(
-                isSelected ? Icons.check_circle : Icons.chevron_right,
-                color: isSelected ? Colors.green : Colors.white38,
+                isSelected
+                    ? Icons.check_circle_rounded
+                    : Icons.radio_button_unchecked_rounded,
+                color: isSelected ? AppTheme.neonGreen : Colors.white24,
+                size: 20,
               ),
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _InfoRow extends StatelessWidget {
-  final String label;
-  final String value;
-
-  const _InfoRow({required this.label, required this.value});
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Text(label, style: const TextStyle(color: Colors.white60, fontSize: 12)),
-          Flexible(
-            child: Text(
-              value,
-              textAlign: TextAlign.end,
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600),
-            ),
-          ),
-        ],
       ),
     );
   }

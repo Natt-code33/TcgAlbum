@@ -16,6 +16,7 @@ import '../services/album_storage_service.dart';
 import '../services/tcg_api_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/game_badge.dart';
+import '../widgets/pokemon_scanner_hud.dart';
 import 'scanner_view.dart';
 import 'manual_card_view.dart';
 
@@ -87,6 +88,7 @@ class _AlbumViewState extends State<AlbumView> {
   String _searchQuery = '';
   AlbumSortOption _sortOption = AlbumSortOption.recent;
   PokemonAlbumFilter _activeFilter = PokemonAlbumFilter.all;
+  int _bottomNavIndex = 1; // 1: Mi Mazo, 2: Historial, 3: Mercado
 
   @override
   void initState() {
@@ -339,12 +341,36 @@ class _AlbumViewState extends State<AlbumView> {
   }
 
   Future<void> _openScanner() async {
-    await Navigator.of(context).push(
+    final returnedTab = await Navigator.of(context).push<int>(
       MaterialPageRoute(
         builder: (_) => const ScannerView(),
       ),
     );
     await _loadAlbumsAndActive();
+    if (returnedTab != null && mounted) {
+      _onBottomTabSelected(returnedTab);
+    }
+  }
+
+  void _onBottomTabSelected(int index) {
+    if (index == 0) {
+      _openScanner();
+      return;
+    }
+    setState(() {
+      _bottomNavIndex = index;
+      if (index == 1) {
+        // Mi Mazo (Colección completa)
+        _sortOption = AlbumSortOption.recent;
+      } else if (index == 2) {
+        // Historial (Últimas escaneadas/añadidas)
+        _sortOption = AlbumSortOption.recent;
+        _activeFilter = PokemonAlbumFilter.all;
+      } else if (index == 3) {
+        // Mercado (Ordenado de mayor a menor valor en €)
+        _sortOption = AlbumSortOption.priceDesc;
+      }
+    });
   }
 
   Future<void> _openManualEntry() async {
@@ -687,42 +713,24 @@ class _AlbumViewState extends State<AlbumView> {
               ),
             ),
             const SizedBox(height: 18),
-            Row(
-              children: [
-                Expanded(
-                  flex: 2,
-                  child: ElevatedButton.icon(
-                    onPressed: () {
-                      Navigator.pop(ctx);
-                      _editCard(card);
-                    },
-                    icon: const Icon(Icons.edit, size: 18),
-                    label: const Text('Editar Carta (Foto, Precios...)'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.amber,
-                      foregroundColor: Colors.black,
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    onPressed: () {
-                      Navigator.pop(ctx);
-                      _deleteCard(card);
-                    },
-                    icon: const Icon(Icons.delete, color: Colors.redAccent, size: 18),
-                    label: const Text('Eliminar', style: TextStyle(color: Colors.redAccent, fontSize: 13)),
-                    style: OutlinedButton.styleFrom(
-                      side: const BorderSide(color: Colors.redAccent),
-                      padding: const EdgeInsets.symmetric(vertical: 12),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    ),
-                  ),
-                ),
-              ],
+            NeonPillButton(
+              label: 'Editar Carta y Estadísticas',
+              icon: Icons.bar_chart_rounded,
+              style: NeonButtonStyle.green,
+              onPressed: () {
+                Navigator.pop(ctx);
+                _editCard(card);
+              },
+            ),
+            const SizedBox(height: 10),
+            NeonPillButton(
+              label: 'Eliminar de mi Colección',
+              icon: Icons.delete_outline_rounded,
+              style: NeonButtonStyle.darkStats,
+              onPressed: () {
+                Navigator.pop(ctx);
+                _deleteCard(card);
+              },
             ),
           ],
         ),
@@ -987,78 +995,12 @@ class _AlbumViewState extends State<AlbumView> {
     );
   }
 
-  // ── Barra inferior fija con efecto Glass ─────────────────────────────────
+  // ── Barra inferior con Pokéball central luminosa (Estilo Pokémon TCG Scanner)
   Widget _buildBottomBar() {
-    return ClipRRect(
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-        child: Container(
-          padding: EdgeInsets.only(
-            left: 16,
-            right: 16,
-            top: 12,
-            bottom: MediaQuery.of(context).padding.bottom + 12,
-          ),
-          decoration: BoxDecoration(
-            color: AppTheme.bgDark.withValues(alpha: 0.8),
-            border: const Border(
-              top: BorderSide(color: Color(0x334B68B8), width: 1),
-            ),
-          ),
-          child: Row(
-            children: [
-              Expanded(
-                flex: 3,
-                child: ElevatedButton.icon(
-                  onPressed: _openScanner,
-                  icon: const Icon(Icons.camera_alt_rounded, size: 20),
-                  label: Text(
-                    'Escanear Carta',
-                    style: GoogleFonts.outfit(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppTheme.primary,
-                    foregroundColor: Colors.black,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    elevation: 4,
-                    shadowColor: AppTheme.primary.withValues(alpha: 0.4),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                flex: 2,
-                child: OutlinedButton.icon(
-                  onPressed: _openManualEntry,
-                  icon: const Icon(Icons.edit_note_rounded, size: 18, color: Colors.white70),
-                  label: Text(
-                    'A mano',
-                    style: GoogleFonts.outfit(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.white,
-                    ),
-                  ),
-                  style: OutlinedButton.styleFrom(
-                    side: const BorderSide(color: Color(0x554B68B8)),
-                    backgroundColor: const Color(0x3316213E),
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
+    return PokeballBottomBar(
+      selectedIndex: _bottomNavIndex,
+      onCenterScanTap: _openScanner,
+      onTabSelected: _onBottomTabSelected,
     );
   }
 
