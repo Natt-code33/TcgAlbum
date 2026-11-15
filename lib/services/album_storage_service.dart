@@ -14,12 +14,14 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/pokemon_card.dart';
+import '../models/deck.dart';
 
 class AlbumStorageService {
   static const _kDataVersion = 'tcg_data_version';
   static const _kAlbumsKey = 'tcg_albums_v2';
   static const _kActiveAlbumKey = 'tcg_active_album';
   static const _kLegacyAlbumKey = 'pokemon_album';
+  static const _kDecksKey = 'tcg_decks_v1';
 
   static const int _currentVersion = 2;
 
@@ -490,5 +492,123 @@ class AlbumStorageService {
 
     await saveAllAlbums(existing);
     return count;
+  }
+
+  // ── Gestión de Mazos (Decks) virtuales ────────────────────────────────────
+  Future<List<TcgDeck>> loadAllDecks() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_kDecksKey);
+    if (raw != null && raw.isNotEmpty) {
+      try {
+        final List<dynamic> decoded = json.decode(raw);
+        return decoded
+            .whereType<Map<String, dynamic>>()
+            .map(TcgDeck.fromJson)
+            .toList();
+      } catch (_) {}
+    }
+    return [];
+  }
+
+  Future<void> saveAllDecks(List<TcgDeck> decks) async {
+    final prefs = await SharedPreferences.getInstance();
+    final encoded = json.encode(decks.map((d) => d.toJson()).toList());
+    await prefs.setString(_kDecksKey, encoded);
+  }
+
+  Future<TcgDeck> createDeck(String name, {String? format}) async {
+    final decks = await loadAllDecks();
+    final newDeck = TcgDeck(
+      id: 'deck_${DateTime.now().microsecondsSinceEpoch}',
+      name: name,
+      format: format ?? 'Estándar',
+    );
+    decks.add(newDeck);
+    await saveAllDecks(decks);
+    return newDeck;
+  }
+
+  Future<void> renameDeck(String deckId, String newName) async {
+    final decks = await loadAllDecks();
+    final index = decks.indexWhere((d) => d.id == deckId);
+    if (index != -1) {
+      decks[index] = decks[index].copyWith(name: newName);
+      await saveAllDecks(decks);
+    }
+  }
+
+  Future<void> deleteDeck(String deckId) async {
+    final decks = await loadAllDecks();
+    decks.removeWhere((d) => d.id == deckId);
+    await saveAllDecks(decks);
+  }
+
+  Future<void> saveDeck(TcgDeck deck) async {
+    final decks = await loadAllDecks();
+    final index = decks.indexWhere((d) => d.id == deck.id);
+    if (index != -1) {
+      decks[index] = deck;
+    } else {
+      decks.add(deck);
+    }
+    await saveAllDecks(decks);
+  }
+
+  /// Añade una carta al mazo. Devuelve false si se superó el máximo de 4 copias
+  /// del mismo nombre (regla estándar del TCG, salvo Energía Básica).
+  Future<bool> addCardToDeck(String deckId, PokemonCard card,
+      {bool isBasicEnergy = false}) async {
+    final decks = await loadAllDecks();
+    final index = decks.indexWhere((d) => d.id == deckId);
+    if (index == -1) return false;
+
+    final deck = decks[index];
+    final entries = List<DeckCardEntry>.from(deck.entries);
+    final existingIdx = entries.indexWhere((e) => e.cardId == card.id);
+
+    final currentCount = existingIdx != -1 ? entries[existingIdx].quantity : 0;
+    final maxCopies = isBasicEnergy ? 60 : 4;
+    if (currentCount >= maxCopies) return false;
+
+    if (existingIdx != -1) {
+      entries[existingIdx] = entries[existingIdx].copyWith(
+        quantity: currentCount + 1,
+      );
+    } else {
+      entries.add(DeckCardEntry(
+        cardId: card.id,
+        quantity: 1,
+        cardName: card.name,
+        imageUrl: card.thumbnailImageUrl,
+        setName: card.setName,
+        number: card.number,
+      ));
+    }
+
+    decks[index] = deck.copyWith(entries: entries);
+    await saveAllDecks(decks);
+    return true;
+  }
+
+  /// Elimina una copia de la carta del mazo (o la entrada completa si llega a 0).
+  Future<void> removeCardFromDeck(String deckId, String cardId) async {
+    final decks = await loadAllDecks();
+    final index = decks.indexWhere((d) => d.id == deckId);
+    if (index == -1) return;
+
+    final deck = decks[index];
+    final entries = List<DeckCardEntry>.from(deck.entries);
+    final entryIdx = entries.indexWhere((e) => e.cardId == cardId);
+    if (entryIdx == -1) return;
+
+    final entry = entries[entryIdx];
+    if (entry.quantity > 1) {
+      entries[entryIdx] = entry.copyWith(quantity: entry.quantity - 1);
+    } else {
+      entries.removeAt(entryIdx);
+    }
+
+    decks[index] = deck.copyWith(entries: entries);
+    await saveAllDecks(decks);
   }
 }

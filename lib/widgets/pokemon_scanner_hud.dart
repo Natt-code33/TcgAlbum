@@ -5,7 +5,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../theme/app_theme.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 1. LOGO CABECERA "Pokémon TCG SCANNER"
+// 1. LOGO CABECERA "Pokémon TCG SCANNER" (Paleta Azul / Negro Neón)
 // ─────────────────────────────────────────────────────────────────────────────
 class PokemonScannerLogo extends StatelessWidget {
   final double scale;
@@ -22,11 +22,10 @@ class PokemonScannerLogo extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Texto "Pokémon" con borde azul 3D y relleno amarillo brillante
           Stack(
             alignment: Alignment.center,
             children: [
-              // Sombra exterior profunda
+              // Resplandor exterior
               Text(
                 'Pokémon',
                 style: GoogleFonts.outfit(
@@ -36,24 +35,24 @@ class PokemonScannerLogo extends StatelessWidget {
                   height: 1.0,
                   shadows: [
                     Shadow(
-                      color: Colors.black.withValues(alpha: 0.75),
+                      color: Colors.black.withValues(alpha: 0.8),
                       offset: const Offset(0, 5),
-                      blurRadius: 10,
+                      blurRadius: 12,
                     ),
                     Shadow(
-                      color: AppTheme.pokemonBlue.withValues(alpha: 0.8),
+                      color: AppTheme.cyanAccent.withValues(alpha: 0.7),
                       offset: const Offset(0, 0),
-                      blurRadius: 16,
+                      blurRadius: 18,
                     ),
                   ],
                   foreground: Paint()
                     ..style = PaintingStyle.stroke
                     ..strokeWidth = 7.5
                     ..strokeJoin = StrokeJoin.round
-                    ..color = const Color(0xFF1B539B),
+                    ..color = const Color(0xFF0B3B66),
                 ),
               ),
-              // Segundo trazo azul eléctrico
+              // Trazo azul neón
               Text(
                 'Pokémon',
                 style: GoogleFonts.outfit(
@@ -65,18 +64,18 @@ class PokemonScannerLogo extends StatelessWidget {
                     ..style = PaintingStyle.stroke
                     ..strokeWidth = 4.5
                     ..strokeJoin = StrokeJoin.round
-                    ..color = const Color(0xFF2A75BB),
+                    ..color = const Color(0xFF0EA5E9),
                 ),
               ),
-              // Relleno amarillo dorado con degradado superior
+              // Relleno azul cielo → cian
               ShaderMask(
                 shaderCallback: (bounds) => const LinearGradient(
                   begin: Alignment.topCenter,
                   end: Alignment.bottomCenter,
                   colors: [
-                    Color(0xFFFFF176),
-                    Color(0xFFFFCB05),
-                    Color(0xFFFFA000),
+                    Color(0xFFBAE6FD),
+                    Color(0xFF38BDF8),
+                    Color(0xFF0369A1),
                   ],
                 ).createShader(bounds),
                 child: Text(
@@ -93,15 +92,14 @@ class PokemonScannerLogo extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 2),
-          // Sub-badge "TCG SCANNER" con borde neón cian
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 3),
             decoration: BoxDecoration(
               gradient: const LinearGradient(
                 colors: [
-                  Color(0xFF0E2954),
-                  Color(0xFF18458B),
-                  Color(0xFF0E2954),
+                  Color(0xFF0A2440),
+                  Color(0xFF123E66),
+                  Color(0xFF0A2440),
                 ],
               ),
               borderRadius: BorderRadius.circular(999),
@@ -113,7 +111,6 @@ class PokemonScannerLogo extends StatelessWidget {
                 BoxShadow(
                   color: AppTheme.cyanAccent.withValues(alpha: 0.35),
                   blurRadius: 10,
-                  spreadRadius: 0.5,
                 ),
               ],
             ),
@@ -134,7 +131,7 @@ class PokemonScannerLogo extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 2. MARCO DE ESCANEO NEÓN HUD (Esquinas Cian/Amarillo + Retícula + Callout)
+// 2. MARCO DE ESCANEO NEÓN HUD (Esquinas Cian/Azul + Retícula + Callout)
 // ─────────────────────────────────────────────────────────────────────────────
 class NeonScannerFrame extends StatefulWidget {
   final Widget child;
@@ -194,21 +191,20 @@ class _NeonScannerFrameState extends State<NeonScannerFrame>
           alignment: Alignment.center,
           clipBehavior: Clip.none,
           children: [
-            // Contenedor interior de la carta
             Container(
               width: widget.width,
               height: widget.height,
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(18),
-                color: const Color(0xFF0A1428),
+                color: const Color(0xFF081120),
                 boxShadow: [
                   BoxShadow(
-                    color: AppTheme.cyanAccent.withValues(alpha: 0.16),
+                    color: AppTheme.cyanAccent.withValues(alpha: 0.18),
                     blurRadius: 24,
                     offset: const Offset(-8, 0),
                   ),
                   BoxShadow(
-                    color: AppTheme.primary.withValues(alpha: 0.16),
+                    color: AppTheme.deepBlue.withValues(alpha: 0.18),
                     blurRadius: 24,
                     offset: const Offset(8, 0),
                   ),
@@ -220,7 +216,6 @@ class _NeonScannerFrameState extends State<NeonScannerFrame>
               ),
             ),
 
-            // Láser horizontal y retícula circular HUD
             if (widget.showLaser || widget.isScanning)
               SizedBox(
                 width: widget.width + 16,
@@ -234,7 +229,6 @@ class _NeonScannerFrameState extends State<NeonScannerFrame>
                     return Stack(
                       alignment: Alignment.center,
                       children: [
-                        // Línea láser neón verde/cian
                         Positioned(
                           top: laserY,
                           left: 0,
@@ -244,16 +238,16 @@ class _NeonScannerFrameState extends State<NeonScannerFrame>
                             decoration: BoxDecoration(
                               gradient: const LinearGradient(
                                 colors: [
-                                  Color(0x0000E5FF),
-                                  Color(0xFF00E5FF),
-                                  Color(0xFF2AF598),
-                                  Color(0xFF00E5FF),
-                                  Color(0x0000E5FF),
+                                  Color(0x0022D3EE),
+                                  Color(0xFF22D3EE),
+                                  Color(0xFF38BDF8),
+                                  Color(0xFF22D3EE),
+                                  Color(0x0022D3EE),
                                 ],
                               ),
                               boxShadow: [
                                 BoxShadow(
-                                  color: const Color(0xFF2AF598)
+                                  color: const Color(0xFF22D3EE)
                                       .withValues(alpha: 0.75),
                                   blurRadius: 10,
                                   spreadRadius: 1.5,
@@ -262,7 +256,6 @@ class _NeonScannerFrameState extends State<NeonScannerFrame>
                             ),
                           ),
                         ),
-                        // Retícula circular central estilo HUD
                         CustomPaint(
                           size: const Size(68, 68),
                           painter: _HudReticlePainter(
@@ -277,7 +270,6 @@ class _NeonScannerFrameState extends State<NeonScannerFrame>
                 ),
               ),
 
-            // Esquinas neón (Cian a la izquierda, Amarillo a la derecha)
             IgnorePointer(
               child: CustomPaint(
                 size: Size(widget.width + 18, widget.height + 18),
@@ -285,7 +277,6 @@ class _NeonScannerFrameState extends State<NeonScannerFrame>
               ),
             ),
 
-            // Etiqueta flotante lateral derecha (HUD Callout Tag)
             if (widget.calloutTitle != null && widget.calloutTitle!.isNotEmpty)
               Positioned(
                 right: 0,
@@ -319,7 +310,6 @@ class _HudCalloutTag extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        // Línea conectora cian
         Container(
           width: 14,
           height: 1.8,
@@ -337,7 +327,7 @@ class _HudCalloutTag extends StatelessWidget {
           constraints: const BoxConstraints(maxWidth: 112),
           padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
           decoration: BoxDecoration(
-            color: const Color(0xE60B1528),
+            color: const Color(0xE6081120),
             borderRadius: BorderRadius.circular(10),
             border: Border.all(
               color: AppTheme.cyanAccent.withValues(alpha: 0.75),
@@ -376,7 +366,7 @@ class _HudCalloutTag extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: GoogleFonts.outfit(
-                    color: AppTheme.neonGreen,
+                    color: AppTheme.cyanAccent,
                     fontSize: 10.5,
                     fontWeight: FontWeight.w700,
                   ),
@@ -389,7 +379,7 @@ class _HudCalloutTag extends StatelessWidget {
                       const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
                   decoration: BoxDecoration(
                     gradient: const LinearGradient(
-                      colors: [Color(0xFFFF6B35), Color(0xFFE63946)],
+                      colors: [Color(0xFF0EA5E9), Color(0xFF0369A1)],
                     ),
                     borderRadius: BorderRadius.circular(5),
                   ),
@@ -435,12 +425,10 @@ class _NeonBracketsPainter extends CustomPainter {
       ..strokeCap = StrokeCap.round;
 
     final leftPath = Path()
-      // Superior izquierda
       ..moveTo(0, cornerLen)
       ..lineTo(0, radius)
       ..quadraticBezierTo(0, 0, radius, 0)
       ..lineTo(cornerLen, 0)
-      // Inferior izquierda
       ..moveTo(0, size.height - cornerLen)
       ..lineTo(0, size.height - radius)
       ..quadraticBezierTo(0, size.height, radius, size.height)
@@ -449,35 +437,33 @@ class _NeonBracketsPainter extends CustomPainter {
     canvas.drawPath(leftPath, cyanGlowPaint);
     canvas.drawPath(leftPath, cyanPaint);
 
-    // ── Esquinas Derechas (Amarillo/Dorado Neón) ──
-    final yellowGlowPaint = Paint()
-      ..color = AppTheme.primary.withValues(alpha: 0.65)
+    // ── Esquinas Derechas (Azul Neón) ──
+    final blueGlowPaint = Paint()
+      ..color = AppTheme.deepBlue.withValues(alpha: 0.65)
       ..style = PaintingStyle.stroke
       ..strokeWidth = strokeWidth + 5
       ..strokeCap = StrokeCap.round
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
 
-    final yellowPaint = Paint()
-      ..color = AppTheme.primary
+    final bluePaint = Paint()
+      ..color = AppTheme.deepBlue
       ..style = PaintingStyle.stroke
       ..strokeWidth = strokeWidth
       ..strokeCap = StrokeCap.round;
 
     final rightPath = Path()
-      // Superior derecha
       ..moveTo(size.width - cornerLen, 0)
       ..lineTo(size.width - radius, 0)
       ..quadraticBezierTo(size.width, 0, size.width, radius)
       ..lineTo(size.width, cornerLen)
-      // Inferior derecha
       ..moveTo(size.width - cornerLen, size.height)
       ..lineTo(size.width - radius, size.height)
       ..quadraticBezierTo(
           size.width, size.height, size.width, size.height - radius)
       ..lineTo(size.width, size.height - cornerLen);
 
-    canvas.drawPath(rightPath, yellowGlowPaint);
-    canvas.drawPath(rightPath, yellowPaint);
+    canvas.drawPath(rightPath, blueGlowPaint);
+    canvas.drawPath(rightPath, bluePaint);
   }
 
   @override
@@ -509,7 +495,7 @@ class _HudReticlePainter extends CustomPainter {
     canvas.drawCircle(center, radius * 0.72, ringPaint);
 
     final arcPaint = Paint()
-      ..color = AppTheme.neonGreen
+      ..color = AppTheme.primary
       ..style = PaintingStyle.stroke
       ..strokeWidth = 3.2
       ..strokeCap = StrokeCap.round;
@@ -526,9 +512,9 @@ class _HudReticlePainter extends CustomPainter {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 3. BOTONES PÍLDORA NEÓN ("Añadir a mi Colección", "Ver en el Mercado", etc.)
+// 3. BOTONES PÍLDORA NEÓN UNIFICADOS (mismo diseño y fuente en toda la app)
 // ─────────────────────────────────────────────────────────────────────────────
-enum NeonButtonStyle { green, blue, darkStats }
+enum NeonButtonStyle { primary, dark, green, darkStats }
 
 class NeonPillButton extends StatelessWidget {
   final String label;
@@ -541,38 +527,44 @@ class NeonPillButton extends StatelessWidget {
     super.key,
     required this.label,
     this.icon,
-    this.style = NeonButtonStyle.green,
+    this.style = NeonButtonStyle.primary,
     this.onPressed,
     this.compact = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    final Gradient gradient;
-    final Color borderColor;
-    final Color glowColor;
-    final Color textColor;
+    final bool isDark = style == NeonButtonStyle.dark || style == NeonButtonStyle.darkStats;
+    final bool isGreen = style == NeonButtonStyle.green;
+    final bool isDarkStats = style == NeonButtonStyle.darkStats;
 
-    switch (style) {
-      case NeonButtonStyle.green:
-        gradient = AppTheme.neonGreenButtonGradient;
-        borderColor = const Color(0xFF9EFFD0);
-        glowColor = const Color(0xFF00E676).withValues(alpha: 0.45);
-        textColor = const Color(0xFF042315);
-        break;
-      case NeonButtonStyle.blue:
-        gradient = AppTheme.neonBlueButtonGradient;
-        borderColor = const Color(0xFF80E5FF);
-        glowColor = const Color(0xFF0099FF).withValues(alpha: 0.45);
-        textColor = Colors.white;
-        break;
-      case NeonButtonStyle.darkStats:
-        gradient = AppTheme.darkStatsButtonGradient;
-        borderColor = const Color(0xFF4A608A);
-        glowColor = Colors.black.withValues(alpha: 0.35);
-        textColor = Colors.white;
-        break;
-    }
+    final Gradient gradient = isGreen
+        ? const LinearGradient(
+            begin: Alignment.centerLeft,
+            end: Alignment.centerRight,
+            colors: [Color(0xFF1A3A5C), Color(0xFF0D2440)],
+          )
+        : isDarkStats
+            ? const LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Color(0xFF1B2C46), Color(0xFF0E1B2E)],
+              )
+            : (isDark ? AppTheme.darkButtonGradient : AppTheme.neonButtonGradient);
+    final Color borderColor = isGreen
+        ? const Color(0xFF38BDF8).withValues(alpha: 0.6)
+        : isDarkStats
+            ? const Color(0xFF2E4A6E)
+            : (isDark ? const Color(0xFF2E4A6E) : const Color(0xFF7DD3FC));
+    final Color glowColor = isGreen
+        ? AppTheme.deepBlue.withValues(alpha: 0.35)
+        : (isDark
+            ? Colors.black.withValues(alpha: 0.35)
+            : AppTheme.deepBlue.withValues(alpha: 0.45));
+    final Color textColor = Colors.white;
+    final Color iconColor = isGreen
+        ? AppTheme.cyanAccent
+        : (isDark ? AppTheme.cyanAccent : Colors.white);
 
     return Material(
       color: Colors.transparent,
@@ -582,7 +574,7 @@ class NeonPillButton extends StatelessWidget {
         child: Container(
           padding: EdgeInsets.symmetric(
             horizontal: compact ? 14 : 18,
-            vertical: compact ? 8 : 11,
+            vertical: compact ? 9 : 12,
           ),
           decoration: BoxDecoration(
             gradient: gradient,
@@ -591,7 +583,7 @@ class NeonPillButton extends StatelessWidget {
             boxShadow: [
               BoxShadow(
                 color: glowColor,
-                blurRadius: 14,
+                blurRadius: 12,
                 offset: const Offset(0, 4),
               ),
             ],
@@ -604,9 +596,7 @@ class NeonPillButton extends StatelessWidget {
                 Icon(
                   icon,
                   size: compact ? 15 : 18,
-                  color: style == NeonButtonStyle.darkStats
-                      ? AppTheme.cyanAccent
-                      : textColor,
+                  color: iconColor,
                 ),
                 const SizedBox(width: 7),
               ],
@@ -618,7 +608,7 @@ class NeonPillButton extends StatelessWidget {
                   style: GoogleFonts.outfit(
                     color: textColor,
                     fontSize: compact ? 12.5 : 14.5,
-                    fontWeight: FontWeight.w800,
+                    fontWeight: FontWeight.w700,
                     letterSpacing: 0.2,
                   ),
                 ),
@@ -633,6 +623,7 @@ class NeonPillButton extends StatelessWidget {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 4. BARRA DE NAVEGACIÓN INFERIOR CON POKÉBALL CENTRAL NEÓN
+//    Pestañas: Colección | Mazos | (Pokéball Escanear) | Historial | Mercado
 // ─────────────────────────────────────────────────────────────────────────────
 class PokeballBottomBar extends StatelessWidget {
   final int selectedIndex;
@@ -656,7 +647,6 @@ class PokeballBottomBar extends StatelessWidget {
         alignment: Alignment.bottomCenter,
         clipBehavior: Clip.none,
         children: [
-          // Fondo cristal oscuro de la barra inferior
           ClipRRect(
             borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
             child: BackdropFilter(
@@ -673,8 +663,8 @@ class PokeballBottomBar extends StatelessWidget {
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
                     colors: [
-                      Color(0xEB0E1A32),
-                      Color(0xF5070D1B),
+                      Color(0xEB0C1626),
+                      Color(0xF5050A14),
                     ],
                   ),
                   border: Border(
@@ -695,18 +685,18 @@ class PokeballBottomBar extends StatelessWidget {
                   mainAxisAlignment: MainAxisAlignment.spaceAround,
                   children: [
                     _NavTabItem(
-                      icon: Icons.center_focus_strong_rounded,
-                      label: 'Escanear',
+                      icon: Icons.style_rounded,
+                      label: 'Colección',
                       isSelected: selectedIndex == 0,
                       onTap: () => onTabSelected(0),
                     ),
                     _NavTabItem(
-                      icon: Icons.style_rounded,
-                      label: 'Mi Mazo',
+                      icon: Icons.layers_rounded,
+                      label: 'Mazos',
                       isSelected: selectedIndex == 1,
                       onTap: () => onTabSelected(1),
                     ),
-                    const SizedBox(width: 74), // Espacio para la Pokéball central
+                    const SizedBox(width: 74),
                     _NavTabItem(
                       icon: Icons.history_rounded,
                       label: 'Historial',
@@ -725,7 +715,7 @@ class PokeballBottomBar extends StatelessWidget {
             ),
           ),
 
-          // Botón Pokéball Central Elevado con Brillo Neón Cian
+          // Botón Pokéball Central Elevado (único disparador de escaneo)
           Positioned(
             bottom: bottomPadding + 6,
             child: GestureDetector(
@@ -745,7 +735,7 @@ class PokeballBottomBar extends StatelessWidget {
                           spreadRadius: 2,
                         ),
                         BoxShadow(
-                          color: AppTheme.electricBlue.withValues(alpha: 0.45),
+                          color: AppTheme.deepBlue.withValues(alpha: 0.45),
                           blurRadius: 28,
                           spreadRadius: 4,
                         ),
@@ -789,20 +779,20 @@ class _NavTabItem extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final color = isSelected ? AppTheme.cyanAccent : const Color(0xFF8FA3C7);
+    final color = isSelected ? AppTheme.cyanAccent : const Color(0xFF7C93B5);
 
     return InkWell(
       onTap: onTap,
       borderRadius: BorderRadius.circular(14),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(
               icon,
               color: color,
-              size: 23,
+              size: 22,
               shadows: isSelected
                   ? [
                       Shadow(
@@ -817,7 +807,7 @@ class _NavTabItem extends StatelessWidget {
               label,
               style: GoogleFonts.outfit(
                 color: color,
-                fontSize: 11,
+                fontSize: 10.5,
                 fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
               ),
             ),
@@ -835,21 +825,19 @@ class _NeonPokeballPainter extends CustomPainter {
     final radius = size.width / 2;
     final rect = Rect.fromCircle(center: center, radius: radius - 2);
 
-    // Mitad superior azul cian brillante
     final topPaint = Paint()
       ..shader = const LinearGradient(
         begin: Alignment.topCenter,
         end: Alignment.bottomCenter,
         colors: [
-          Color(0xFF40E0FF),
-          Color(0xFF0077FF),
-          Color(0xFF0A3D91),
+          Color(0xFF7DD3FC),
+          Color(0xFF0EA5E9),
+          Color(0xFF075985),
         ],
       ).createShader(rect);
 
     canvas.drawArc(rect, math.pi, math.pi, true, topPaint);
 
-    // Mitad inferior blanca/plateada con reflejo azulado
     final bottomPaint = Paint()
       ..shader = const LinearGradient(
         begin: Alignment.topCenter,
@@ -863,9 +851,8 @@ class _NeonPokeballPainter extends CustomPainter {
 
     canvas.drawArc(rect, 0, math.pi, true, bottomPaint);
 
-    // Franja ecuatorial oscura
     final bandPaint = Paint()
-      ..color = const Color(0xFF091326)
+      ..color = const Color(0xFF081120)
       ..style = PaintingStyle.stroke
       ..strokeWidth = 4.5;
     canvas.drawLine(
@@ -874,16 +861,14 @@ class _NeonPokeballPainter extends CustomPainter {
       bandPaint,
     );
 
-    // Anillo exterior neón cian
     final outerRingPaint = Paint()
       ..color = AppTheme.cyanAccent
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2.6;
     canvas.drawCircle(center, radius - 1.5, outerRingPaint);
 
-    // Botón central de la Pokéball
     final centerOuterPaint = Paint()
-      ..color = const Color(0xFF091326)
+      ..color = const Color(0xFF081120)
       ..style = PaintingStyle.fill;
     canvas.drawCircle(center, radius * 0.34, centerOuterPaint);
 
@@ -897,7 +882,7 @@ class _NeonPokeballPainter extends CustomPainter {
       ..shader = const RadialGradient(
         colors: [
           Colors.white,
-          Color(0xFF80EAFF),
+          Color(0xFF67E8F9),
         ],
       ).createShader(Rect.fromCircle(center: center, radius: radius * 0.22));
     canvas.drawCircle(center, radius * 0.20, centerCorePaint);

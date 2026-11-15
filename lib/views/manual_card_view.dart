@@ -15,6 +15,7 @@ import '../services/album_storage_service.dart';
 import '../services/ocr_service.dart';
 import '../theme/app_theme.dart';
 
+
 class ManualCardView extends StatefulWidget {
   final PokemonCard? cardToEdit;
   final String? initialName;
@@ -193,7 +194,7 @@ class _ManualCardViewState extends State<ManualCardView> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('Introduce una URL válida que comience por https://'),
-            backgroundColor: Colors.redAccent,
+            backgroundColor: AppTheme.loss,
           ),
         );
         return;
@@ -251,7 +252,7 @@ class _ManualCardViewState extends State<ManualCardView> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('¡"${updated.name}" actualizada en tu álbum!'),
-            backgroundColor: Colors.green,
+            backgroundColor: AppTheme.success,
             duration: const Duration(seconds: 2),
           ),
         );
@@ -292,7 +293,7 @@ class _ManualCardViewState extends State<ManualCardView> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('¡"${card.name}" guardada en tu álbum!'),
-            backgroundColor: Colors.green,
+            backgroundColor: AppTheme.success,
             duration: const Duration(seconds: 2),
           ),
         );
@@ -300,7 +301,7 @@ class _ManualCardViewState extends State<ManualCardView> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('¡Añadida otra copia de "${card.name}" a tu álbum!'),
-            backgroundColor: Colors.green.shade700,
+            backgroundColor: AppTheme.success,
             duration: const Duration(seconds: 2),
           ),
         );
@@ -442,14 +443,6 @@ class _ManualCardViewState extends State<ManualCardView> {
                     fontWeight: FontWeight.bold,
                   ),
                 ),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.green,
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                ),
               ),
 
               // Espacio amplio al final para evitar que quede pegado al borde
@@ -466,7 +459,7 @@ class _ManualCardViewState extends State<ManualCardView> {
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: const Color(0xFF16213E),
+        color: const Color(0xFF0C1626),
         borderRadius: BorderRadius.circular(14),
       ),
       child: Column(
@@ -498,11 +491,11 @@ class _ManualCardViewState extends State<ManualCardView> {
             children: [
               OutlinedButton.icon(
                 onPressed: () => _pickImage(ImageSource.camera),
-                icon: const Icon(Icons.camera_alt, color: Colors.amber, size: 18),
+                icon: const Icon(Icons.camera_alt, color: AppTheme.primary, size: 18),
                 label: const Text('Hacer Foto',
                     style: TextStyle(color: Colors.white, fontSize: 13)),
                 style: OutlinedButton.styleFrom(
-                  side: const BorderSide(color: Colors.amber),
+                  side: const BorderSide(color: AppTheme.primary),
                   padding:
                       const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                 ),
@@ -510,11 +503,11 @@ class _ManualCardViewState extends State<ManualCardView> {
               OutlinedButton.icon(
                 onPressed: () => _pickImage(ImageSource.gallery),
                 icon: const Icon(Icons.photo_library,
-                    color: Colors.amber, size: 18),
+                    color: AppTheme.primary, size: 18),
                 label: const Text('De Galería',
                     style: TextStyle(color: Colors.white, fontSize: 13)),
                 style: OutlinedButton.styleFrom(
-                  side: const BorderSide(color: Colors.amber),
+                  side: const BorderSide(color: AppTheme.primary),
                   padding:
                       const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                 ),
@@ -522,7 +515,7 @@ class _ManualCardViewState extends State<ManualCardView> {
               if (_imageFile != null)
                 IconButton(
                   tooltip: 'Quitar foto',
-                  icon: const Icon(Icons.close, color: Colors.redAccent),
+                  icon: const Icon(Icons.close, color: AppTheme.loss),
                   onPressed: () => setState(() => _imageFile = null),
                 ),
             ],
@@ -552,9 +545,9 @@ class _ManualCardViewState extends State<ManualCardView> {
         hintStyle: const TextStyle(color: Colors.white30, fontSize: 12),
         prefixText: prefixText,
         prefixStyle:
-            const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold),
+            const TextStyle(color: AppTheme.primary, fontWeight: FontWeight.bold),
         filled: true,
-        fillColor: const Color(0xFF0F3460),
+        fillColor: const Color(0xFF10203A),
         contentPadding:
             const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         border: OutlineInputBorder(
@@ -569,7 +562,7 @@ class _ManualCardViewState extends State<ManualCardView> {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
-        color: const Color(0xFF0F3460),
+        color: const Color(0xFF10203A),
         borderRadius: BorderRadius.circular(8),
       ),
       child: Row(
@@ -593,15 +586,15 @@ class _ManualCardViewState extends State<ManualCardView> {
                       label: Text(
                         lang.label,
                         style: TextStyle(
-                          color: isSelected ? Colors.black : Colors.white70,
+                          color: isSelected ? Colors.white : Colors.white70,
                           fontSize: 11,
                           fontWeight:
                               isSelected ? FontWeight.bold : FontWeight.normal,
                         ),
                       ),
                       selected: isSelected,
-                      selectedColor: Colors.amber,
-                      backgroundColor: const Color(0xFF16213E),
+                      selectedColor: AppTheme.primary,
+                      backgroundColor: const Color(0xFF0C1626),
                       padding: const EdgeInsets.symmetric(horizontal: 4),
                       onSelected: (selected) {
                         if (selected) setState(() => _selectedLanguage = lang);
@@ -621,16 +614,16 @@ class _ManualCardViewState extends State<ManualCardView> {
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: const Color(0xFF16213E),
+        color: const Color(0xFF0C1626),
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.greenAccent.withValues(alpha: 0.25)),
+        border: Border.all(color: AppTheme.success.withValues(alpha: 0.25)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Row(
             children: [
-              Icon(Icons.account_balance_wallet, color: Colors.greenAccent, size: 18),
+              Icon(Icons.account_balance_wallet, color: AppTheme.success, size: 18),
               SizedBox(width: 8),
               Text(
                 'Datos de Portfolio / Colección (Opcional)',
@@ -663,7 +656,7 @@ class _ManualCardViewState extends State<ManualCardView> {
                         return Theme(
                           data: ThemeData.dark().copyWith(
                             colorScheme: const ColorScheme.dark(
-                              primary: Colors.amber,
+                              primary: AppTheme.primary,
                               surface: Color(0xFF16213E),
                             ),
                           ),
@@ -679,7 +672,7 @@ class _ManualCardViewState extends State<ManualCardView> {
                     height: 48,
                     padding: const EdgeInsets.symmetric(horizontal: 12),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF0F3460),
+                      color: const Color(0xFF10203A),
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Row(
@@ -702,7 +695,7 @@ class _ManualCardViewState extends State<ManualCardView> {
                             onTap: () => setState(() => _purchaseDate = null),
                             child: const Padding(
                               padding: EdgeInsets.only(right: 4),
-                              child: Icon(Icons.close, size: 16, color: Colors.redAccent),
+                              child: Icon(Icons.close, size: 16, color: AppTheme.loss),
                             ),
                           ),
                         const Icon(Icons.calendar_today, size: 16, color: Colors.white54),
@@ -731,14 +724,14 @@ class _ManualCardViewState extends State<ManualCardView> {
                       label: Text(
                         '${cond.shortCode} (${cond.label})',
                         style: TextStyle(
-                          color: isSelected ? Colors.black : Colors.white70,
+                          color: isSelected ? Colors.white : Colors.white70,
                           fontSize: 11,
                           fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
                         ),
                       ),
                       selected: isSelected,
                       selectedColor: Color(cond.colorHex),
-                      backgroundColor: const Color(0xFF0F3460),
+                      backgroundColor: const Color(0xFF10203A),
                       side: BorderSide(
                         color: isSelected ? Color(cond.colorHex) : Colors.white24,
                       ),

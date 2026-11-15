@@ -354,7 +354,7 @@ class _ScannerViewState extends State<ScannerView> {
           SnackBar(
             content: Text(
                 '¡Añadida otra copia de "${_selectedCard!.name}" a tu Colección!'),
-            backgroundColor: Colors.green.shade700,
+            backgroundColor: AppTheme.success,
             duration: const Duration(seconds: 2),
           ),
         );
@@ -470,7 +470,7 @@ class _ScannerViewState extends State<ScannerView> {
 
     showModalBottomSheet(
       context: context,
-      backgroundColor: const Color(0xFF0E1A32),
+      backgroundColor: const Color(0xFF0C1626),
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
@@ -535,7 +535,7 @@ class _ScannerViewState extends State<ScannerView> {
                     value: trend != null
                         ? '${trend.toStringAsFixed(2)} €'
                         : 'Sin datos',
-                    valueColor: AppTheme.neonGreen,
+                    valueColor: AppTheme.cyanAccent,
                   ),
                   const Divider(color: Colors.white12, height: 18),
                   _MarketMetricRow(
@@ -552,7 +552,7 @@ class _ScannerViewState extends State<ScannerView> {
             NeonPillButton(
               label: 'Copiar referencia para Cardmarket / eBay',
               icon: Icons.copy_rounded,
-              style: NeonButtonStyle.blue,
+              style: NeonButtonStyle.primary,
               onPressed: () {
                 Clipboard.setData(ClipboardData(text: queryText));
                 Navigator.pop(ctx);
@@ -577,7 +577,7 @@ class _ScannerViewState extends State<ScannerView> {
 
     showModalBottomSheet(
       context: context,
-      backgroundColor: const Color(0xFF0E1A32),
+      backgroundColor: const Color(0xFF0C1626),
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
@@ -601,7 +601,7 @@ class _ScannerViewState extends State<ScannerView> {
             Row(
               children: [
                 const Icon(Icons.bar_chart_rounded,
-                    color: AppTheme.neonGreen, size: 24),
+                    color: AppTheme.cyanAccent, size: 24),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
@@ -646,7 +646,7 @@ class _ScannerViewState extends State<ScannerView> {
                     _MarketMetricRow(
                       label: 'Precisión Visual IA (dHash + Color)',
                       value: '$visualScore% de coincidencia',
-                      valueColor: AppTheme.neonGreen,
+                      valueColor: AppTheme.cyanAccent,
                     ),
                   ],
                   if (avg != null) ...[
@@ -665,7 +665,7 @@ class _ScannerViewState extends State<ScannerView> {
             NeonPillButton(
               label: 'Personalizar Estado / Graduación (PSA/BGS)',
               icon: Icons.workspace_premium_rounded,
-              style: NeonButtonStyle.darkStats,
+              style: NeonButtonStyle.dark,
               onPressed: () {
                 Navigator.pop(ctx);
                 _openManualEntry(cardToEdit: card);
@@ -680,7 +680,7 @@ class _ScannerViewState extends State<ScannerView> {
   void _showSettingsSheet() {
     showModalBottomSheet(
       context: context,
-      backgroundColor: const Color(0xFF0E1A32),
+      backgroundColor: const Color(0xFF0C1626),
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
@@ -725,7 +725,7 @@ class _ScannerViewState extends State<ScannerView> {
                     label: Text(
                       lang.label,
                       style: GoogleFonts.outfit(
-                        color: isSelected ? Colors.black : Colors.white,
+                        color: isSelected ? Colors.white : Colors.white70,
                         fontWeight:
                             isSelected ? FontWeight.bold : FontWeight.w500,
                       ),
@@ -749,7 +749,7 @@ class _ScannerViewState extends State<ScannerView> {
               NeonPillButton(
                 label: 'Añadir Carta Manualmente',
                 icon: Icons.edit_note_rounded,
-                style: NeonButtonStyle.darkStats,
+                style: NeonButtonStyle.dark,
                 onPressed: () {
                   Navigator.pop(ctx);
                   _openManualEntry();
@@ -833,14 +833,10 @@ class _ScannerViewState extends State<ScannerView> {
         ),
       ),
       bottomNavigationBar: PokeballBottomBar(
-        selectedIndex: 0,
+        selectedIndex: -1,
         onCenterScanTap: () => _captureImage(ImageSource.camera),
         onTabSelected: (index) {
-          if (index == 0) {
-            _captureImage(ImageSource.camera);
-          } else {
-            Navigator.of(context).pop(index);
-          }
+          Navigator.of(context).pop(index);
         },
       ),
     );
@@ -939,7 +935,7 @@ class _ScannerViewState extends State<ScannerView> {
   Widget _buildScannerStatusText() {
     if (_isProcessing) {
       return Text(
-        'Escaneando... 87%',
+        'Escaneando carta...',
         style: GoogleFonts.outfit(
           color: Colors.white,
           fontSize: 14,
@@ -959,7 +955,7 @@ class _ScannerViewState extends State<ScannerView> {
       return Text(
         'Comparando holografía y arte de la carta...',
         style: GoogleFonts.outfit(
-          color: AppTheme.neonGreen,
+          color: AppTheme.cyanAccent,
           fontSize: 13,
           fontWeight: FontWeight.w600,
         ),
@@ -1110,13 +1106,6 @@ class _ScannerViewState extends State<ScannerView> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             _MiniHudButton(
-              icon: Icons.camera_alt_rounded,
-              label: 'Cámara',
-              color: AppTheme.cyanAccent,
-              onTap: () => _captureImage(ImageSource.camera),
-            ),
-            const SizedBox(width: 10),
-            _MiniHudButton(
               icon: Icons.photo_library_rounded,
               label: 'Galería',
               color: AppTheme.primary,
@@ -1126,7 +1115,7 @@ class _ScannerViewState extends State<ScannerView> {
             _MiniHudButton(
               icon: Icons.edit_note_rounded,
               label: 'Manual',
-              color: AppTheme.neonGreen,
+              color: AppTheme.cyanAccent,
               onTap: () => _openManualEntry(),
             ),
           ],
@@ -1312,14 +1301,14 @@ class _ScannerViewState extends State<ScannerView> {
               const SizedBox(height: 10),
               NeonPillButton(
                 label: 'Añadir a mi Colección',
-                style: NeonButtonStyle.green,
+                style: NeonButtonStyle.primary,
                 compact: true,
                 onPressed: _isProcessing ? null : _saveCard,
               ),
               const SizedBox(height: 8),
               NeonPillButton(
                 label: 'Ver en el Mercado',
-                style: NeonButtonStyle.blue,
+                style: NeonButtonStyle.primary,
                 compact: true,
                 onPressed: () => _showMarketSheet(card),
               ),
@@ -1327,7 +1316,7 @@ class _ScannerViewState extends State<ScannerView> {
               NeonPillButton(
                 label: 'Analizar Estadísticas',
                 icon: Icons.bar_chart_rounded,
-                style: NeonButtonStyle.darkStats,
+                style: NeonButtonStyle.dark,
                 compact: true,
                 onPressed: () => _showStatsSheet(card),
               ),
@@ -1397,20 +1386,20 @@ class _ScannerViewState extends State<ScannerView> {
         const SizedBox(height: 14),
         NeonPillButton(
           label: 'Añadir a mi Colección',
-          style: NeonButtonStyle.green,
+          style: NeonButtonStyle.primary,
           onPressed: _isProcessing ? null : _saveCard,
         ),
         const SizedBox(height: 10),
         NeonPillButton(
           label: 'Ver en el Mercado',
-          style: NeonButtonStyle.blue,
+          style: NeonButtonStyle.primary,
           onPressed: () => _showMarketSheet(card),
         ),
         const SizedBox(height: 10),
         NeonPillButton(
           label: 'Analizar Estadísticas',
           icon: Icons.bar_chart_rounded,
-          style: NeonButtonStyle.darkStats,
+          style: NeonButtonStyle.dark,
           onPressed: () => _showStatsSheet(card),
         ),
       ],
@@ -1512,7 +1501,7 @@ class _ScannerViewState extends State<ScannerView> {
           NeonPillButton(
             label: 'Introducir datos de la carta a mano',
             icon: Icons.edit_note_rounded,
-            style: NeonButtonStyle.darkStats,
+            style: NeonButtonStyle.dark,
             compact: true,
             onPressed: _openManualEntry,
           ),
@@ -1663,7 +1652,7 @@ class _ResultCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(14),
         border: Border.all(
           color: isSelected
-              ? AppTheme.neonGreen
+              ? AppTheme.cyanAccent
               : AppTheme.cyanAccent.withValues(alpha: 0.2),
           width: isSelected ? 1.5 : 1.0,
         ),
@@ -1728,20 +1717,28 @@ class _ResultCard extends StatelessWidget {
                                 horizontal: 6, vertical: 2),
                             margin: const EdgeInsets.only(right: 6),
                             decoration: BoxDecoration(
-                              color: AppTheme.neonGreen.withValues(alpha: 0.18),
+                              color: AppTheme.cyanAccent.withValues(alpha: 0.18),
                               borderRadius: BorderRadius.circular(6),
                               border: Border.all(
-                                color: AppTheme.neonGreen,
+                                color: AppTheme.cyanAccent,
                                 width: 0.8,
                               ),
                             ),
-                            child: Text(
-                              '🎨 $visualScore%',
-                              style: GoogleFonts.outfit(
-                                color: AppTheme.neonGreen,
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold,
-                              ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.palette_outlined,
+                                    size: 11, color: AppTheme.cyanAccent),
+                                const SizedBox(width: 3),
+                                Text(
+                                  '$visualScore%',
+                                  style: GoogleFonts.outfit(
+                                    color: AppTheme.cyanAccent,
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         GameBadge(
@@ -1768,7 +1765,7 @@ class _ResultCard extends StatelessWidget {
                 isSelected
                     ? Icons.check_circle_rounded
                     : Icons.radio_button_unchecked_rounded,
-                color: isSelected ? AppTheme.neonGreen : Colors.white24,
+                color: isSelected ? AppTheme.cyanAccent : Colors.white24,
                 size: 20,
               ),
             ],

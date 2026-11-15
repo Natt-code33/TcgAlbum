@@ -15,12 +15,12 @@ import 'local_catalog_service.dart';
 
 /// Idiomas soportados para el reconocimiento y búsqueda de cartas.
 enum CardLanguage {
-  auto('🌐 Auto', 'auto'),
-  es('🇪🇸 Español', 'es'),
-  en('🇬🇧 Inglés', 'en'),
-  ja('🇯🇵 Japonés', 'ja'),
-  ko('🇰🇷 Coreano', 'ko'),
-  zh('🇨🇳 Chino', 'zh-tw');
+  auto('Auto', 'auto'),
+  es('Español', 'es'),
+  en('Inglés', 'en'),
+  ja('Japonés', 'ja'),
+  ko('Coreano', 'ko'),
+  zh('Chino', 'zh-tw');
 
   final String label;
   final String apiCode;

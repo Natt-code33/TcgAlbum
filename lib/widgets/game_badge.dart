@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import '../models/pokemon_card.dart';
+import '../theme/app_theme.dart';
 
 class GameBadge extends StatelessWidget {
   final TcgGame game;
@@ -14,54 +16,65 @@ class GameBadge extends StatelessWidget {
     this.language,
     this.showLabel = true,
     this.fontSize = 10,
-    this.iconSize = 13,
+    this.iconSize = 12,
   });
 
-  (String flag, String code, Color color) _resolveLangInfo(String? lang) {
+  (String code, Color color) _resolveLangInfo(String? lang) {
     switch (lang?.toLowerCase()) {
       case 'es':
-        return ('🇪🇸', 'ES', const Color(0xFFFFB800));
+        return ('ES', AppTheme.cyanAccent);
       case 'en':
-        return ('🇬🇧', 'EN', const Color(0xFF00E5FF));
+        return ('EN', const Color(0xFF38BDF8));
       case 'ja':
-        return ('🇯🇵', 'JA', const Color(0xFFFF6B6B));
+        return ('JA', const Color(0xFF60A5FA));
       case 'ko':
-        return ('🇰🇷', 'KO', const Color(0xFF9B59B6));
+        return ('KO', const Color(0xFF818CF8));
       case 'zh':
       case 'zh-tw':
       case 'zh-cn':
-        return ('🇨🇳', 'ZH', const Color(0xFF4CD97B));
+        return ('ZH', const Color(0xFF2DD4BF));
       default:
-        return ('⚡', 'PKM', Color(game.colorHex));
+        return ('TCG', AppTheme.cyanAccent);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final (flag, code, color) = _resolveLangInfo(language);
+    final (code, color) = _resolveLangInfo(language);
 
     return Container(
       padding: EdgeInsets.symmetric(
-        horizontal: showLabel ? 7 : 5,
+        horizontal: showLabel ? 8 : 6,
         vertical: 3,
       ),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.18),
+        color: const Color(0xD90A1428),
         borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: color.withValues(alpha: 0.55), width: 1),
+        border: Border.all(color: color.withValues(alpha: 0.65), width: 1),
+        boxShadow: [
+          BoxShadow(
+            color: color.withValues(alpha: 0.2),
+            blurRadius: 6,
+          ),
+        ],
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(flag, style: TextStyle(fontSize: iconSize - 2)),
+          Icon(
+            Icons.language_rounded,
+            size: iconSize,
+            color: color,
+          ),
           if (showLabel) ...[
             const SizedBox(width: 4),
             Text(
               code,
-              style: TextStyle(
-                color: color,
+              style: GoogleFonts.outfit(
+                color: Colors.white,
                 fontSize: fontSize,
                 fontWeight: FontWeight.w800,
+                letterSpacing: 0.4,
               ),
             ),
           ],

@@ -7,7 +7,7 @@ import 'package:flutter/material.dart';
 
 /// Franquicia soportada (exclusivamente Pokémon TCG).
 enum TcgGame {
-  pokemon(id: 'pokemon', label: 'Pokémon TCG', iconData: Icons.catching_pokemon, colorHex: 0xFFFFB800);
+  pokemon(id: 'pokemon', label: 'Pokémon TCG', iconData: Icons.catching_pokemon, colorHex: 0xFF38BDF8);
 
   final String id;
   final String label;
@@ -101,11 +101,11 @@ class TcgAlbum {
 
 /// Estado o condición física de una carta coleccionable.
 enum CardCondition {
-  nm('Near Mint', 'NM', 0xFF4CAF50),
-  lp('Lightly Played', 'LP', 0xFF8BC34A),
-  mp('Moderately Played', 'MP', 0xFFFFC107),
-  hp('Heavily Played', 'HP', 0xFFFF9800),
-  graded('Graduada', 'Graded', 0xFF9C27B0);
+  nm('Near Mint', 'NM', 0xFF34D399),
+  lp('Lightly Played', 'LP', 0xFF2DD4BF),
+  mp('Moderately Played', 'MP', 0xFF38BDF8),
+  hp('Heavily Played', 'HP', 0xFFFB7185),
+  graded('Graduada', 'Graded', 0xFFA78BFA);
 
   final String label;
   final String shortCode;
