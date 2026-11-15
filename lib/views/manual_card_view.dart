@@ -120,9 +120,7 @@ class _ManualCardViewState extends State<ManualCardView> {
         );
       }
     } else {
-      if (widget.initialGame != null && widget.initialGame != TcgGame.all) {
-        _selectedGame = widget.initialGame!;
-      }
+      _selectedGame = TcgGame.pokemon;
       if (widget.initialLanguage != null &&
           widget.initialLanguage != CardLanguage.auto) {
         _selectedLanguage = widget.initialLanguage!;
@@ -301,8 +299,8 @@ class _ManualCardViewState extends State<ManualCardView> {
       } else {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('"${card.name}" ya estaba guardada en tu álbum.'),
-            backgroundColor: Colors.amber.shade800,
+            content: Text('¡Añadida otra copia de "${card.name}" a tu álbum!'),
+            backgroundColor: Colors.green.shade700,
             duration: const Duration(seconds: 2),
           ),
         );
@@ -317,7 +315,7 @@ class _ManualCardViewState extends State<ManualCardView> {
       backgroundColor: AppTheme.bgDark,
       appBar: AppBar(
         title: Text(
-          widget.cardToEdit != null ? 'Editar Carta' : 'Añadir Carta Manualmente',
+          widget.cardToEdit != null ? 'Editar Carta Pokémon' : 'Añadir Carta Manualmente',
           style: GoogleFonts.outfit(color: Colors.white, fontSize: 19, fontWeight: FontWeight.bold),
         ),
         iconTheme: const IconThemeData(color: Colors.white),
@@ -333,11 +331,6 @@ class _ManualCardViewState extends State<ManualCardView> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-              // ── Selector de Franquicia TCG ──────────────────────────────
-              _buildGameSelector(),
-
-              const SizedBox(height: 16),
-
               // ── Selector de Foto / Imagen ────────────────────────────────
               _buildImageSection(),
 
@@ -346,8 +339,8 @@ class _ManualCardViewState extends State<ManualCardView> {
               // ── Campos de texto ──────────────────────────────────────────
               _buildTextField(
                 controller: _nameController,
-                label: 'Nombre de la carta *',
-                hint: 'Ej: Black Lotus, Charizard ex, Dark Magician...',
+                label: 'Nombre de la carta Pokémon *',
+                hint: 'Ej: Charizard ex, Pikachu VMAX, Lugia V...',
                 validator: (val) =>
                     (val == null || val.trim().isEmpty) ? 'Requerido' : null,
               ),
@@ -360,7 +353,7 @@ class _ManualCardViewState extends State<ManualCardView> {
                     child: _buildTextField(
                       controller: _setController,
                       label: 'Set / Colección',
-                      hint: 'Ej: Vintage Masters, 151, LOB...',
+                      hint: 'Ej: Escarlata y Púrpura-151, Base Set...',
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -368,7 +361,7 @@ class _ManualCardViewState extends State<ManualCardView> {
                     child: _buildTextField(
                       controller: _numberController,
                       label: 'Número de carta *',
-                      hint: 'Ej: 140/195, 070/280, ST1-03...',
+                      hint: 'Ej: 140/195, TG14/TG30, 001/028...',
                       validator: (val) =>
                           (val == null || val.trim().isEmpty) ? 'Requerido' : null,
                     ),
@@ -465,74 +458,6 @@ class _ManualCardViewState extends State<ManualCardView> {
           ),
         ),
       ),
-      ),
-    );
-  }
-
-  // ── Selector de Franquicia TCG ─────────────────────────────────────────────
-  Widget _buildGameSelector() {
-    final availableGames =
-        TcgGame.values.where((g) => g != TcgGame.all).toList();
-
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color(0xFF16213E),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.amber.withValues(alpha: 0.2)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Row(
-            children: [
-              Icon(Icons.style, color: Colors.amber, size: 18),
-              SizedBox(width: 8),
-              Text(
-                'Selecciona el juego TCG:',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 13,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: availableGames.map((game) {
-                final isSelected = _selectedGame == game;
-                final color = Color(game.colorHex);
-                return Padding(
-                  padding: const EdgeInsets.only(right: 6),
-                  child: ChoiceChip(
-                    avatar: Icon(game.iconData, size: 14, color: isSelected ? Colors.black : color),
-                    label: Text(
-                      game.label,
-                      style: TextStyle(
-                        color: isSelected ? Colors.black : Colors.white70,
-                        fontSize: 12,
-                        fontWeight:
-                            isSelected ? FontWeight.bold : FontWeight.normal,
-                      ),
-                    ),
-                    selected: isSelected,
-                    selectedColor: color,
-                    backgroundColor: const Color(0xFF0F3460),
-                    side: BorderSide(
-                      color: isSelected ? color : Colors.white24,
-                    ),
-                    onSelected: (selected) {
-                      if (selected) setState(() => _selectedGame = game);
-                    },
-                  ),
-                );
-              }).toList(),
-            ),
-          ),
-        ],
       ),
     );
   }

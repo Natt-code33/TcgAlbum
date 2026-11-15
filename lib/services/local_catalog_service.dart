@@ -20,6 +20,8 @@ class LocalCatalogService {
   Database? _db;
   bool _isInitialized = false;
   Completer<void>? _initCompleter;
+  final List<String> _latinSpeciesCache = [];
+  final Set<String> _exactSpeciesLower = {};
 
   /// Inicializa la base de datos local SQLite copiándola desde assets al almacenamiento interno
   /// solo si no existe o si la versión del catálogo ha cambiado. Seguro contra concurrencia.
@@ -52,6 +54,7 @@ class LocalCatalogService {
       }
 
       _db = await openDatabase(path, readOnly: true);
+      await _loadSpeciesCache();
       _isInitialized = true;
       developer.log('Base de datos SQLite local conectada con éxito.', name: 'LocalCatalogService');
       _initCompleter!.complete();
@@ -63,6 +66,112 @@ class LocalCatalogService {
     } finally {
       _initCompleter = null;
     }
+  }
+
+  Future<void> _loadSpeciesCache() async {
+    if (_db == null || _latinSpeciesCache.isNotEmpty) return;
+    try {
+      final rows = await _db!.rawQuery(
+        'SELECT name_en, name_es, name_ja, name_ko, name_zh_tw, name_zh_cn FROM species_translations',
+      );
+      final seenLatin = <String>{};
+      for (final r in rows) {
+        for (final col in ['name_en', 'name_es', 'name_ja', 'name_ko', 'name_zh_tw', 'name_zh_cn']) {
+          final val = (r[col] as String?)?.trim();
+          if (val != null && val.isNotEmpty) {
+            _exactSpeciesLower.add(val.toLowerCase());
+            if ((col == 'name_en' || col == 'name_es') && seenLatin.add(val.toLowerCase())) {
+              _latinSpeciesCache.add(val);
+            }
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  /// Corrige errores típicos de OCR en nombres de Pokémon usando distancia Levenshtein
+  /// contra las 1.025 especies oficiales (ej: "Char1zard ex" -> "Charizard ex", "Gardevo1r" -> "Gardevoir").
+  String repairOcrPokemonName(String rawName) {
+    final trimmed = rawName.trim();
+    if (trimmed.isEmpty || _latinSpeciesCache.isEmpty) return trimmed;
+
+    // Separar sufijo de mecánica (ex, EX, GX, V, VMAX, VSTAR)
+    final suffixMatch = RegExp(
+      r'^(.+?)\s+(ex|EX|GX|VMAX|VSTAR|V|BREAK|LV\.X)$',
+      caseSensitive: false,
+    ).firstMatch(trimmed);
+
+    final basePart = suffixMatch != null ? suffixMatch.group(1)!.trim() : trimmed;
+    final suffixPart = suffixMatch != null ? ' ${suffixMatch.group(2)!}' : '';
+
+    final lowerBase = basePart.toLowerCase();
+    if (_exactSpeciesLower.contains(lowerBase)) {
+      return trimmed;
+    }
+
+    // Normalizar dígitos confundidos con letras (ej. "Char1zard" -> "charizard") exceptuando Porygon2
+    final normalizedBase = lowerBase == 'porygon2'
+        ? lowerBase
+        : lowerBase
+            .replaceAll('0', 'o')
+            .replaceAll('1', 'i')
+            .replaceAll('5', 's');
+
+    if (_exactSpeciesLower.contains(normalizedBase)) {
+      final match = _latinSpeciesCache.firstWhere(
+        (s) => s.toLowerCase() == normalizedBase,
+        orElse: () => basePart,
+      );
+      return '$match$suffixPart';
+    }
+
+    if (normalizedBase.length < 4) return trimmed;
+    final maxAllowedDist = normalizedBase.length >= 7 ? 2 : 1;
+    String? bestSpecies;
+    int bestDist = maxAllowedDist + 1;
+
+    for (final candidate in _latinSpeciesCache) {
+      final candLower = candidate.toLowerCase();
+      if ((candLower.length - normalizedBase.length).abs() > maxAllowedDist) {
+        continue;
+      }
+      final dist = _levenshtein(normalizedBase, candLower);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestSpecies = candidate;
+        if (dist == 1) break;
+      }
+    }
+
+    if (bestSpecies != null && bestDist <= maxAllowedDist) {
+      return '$bestSpecies$suffixPart';
+    }
+    return trimmed;
+  }
+
+  static int _levenshtein(String s, String t) {
+    final n = s.length;
+    final m = t.length;
+    if (n == 0) return m;
+    if (m == 0) return n;
+
+    var prev = List<int>.generate(m + 1, (j) => j);
+    var curr = List<int>.filled(m + 1, 0);
+
+    for (int i = 1; i <= n; i++) {
+      curr[0] = i;
+      for (int j = 1; j <= m; j++) {
+        final cost = s.codeUnitAt(i - 1) == t.codeUnitAt(j - 1) ? 0 : 1;
+        final del = prev[j] + 1;
+        final ins = curr[j - 1] + 1;
+        final sub = prev[j - 1] + cost;
+        curr[j] = del < ins ? (del < sub ? del : sub) : (ins < sub ? ins : sub);
+      }
+      final tmp = prev;
+      prev = curr;
+      curr = tmp;
+    }
+    return prev[m];
   }
 
   /// Busca una carta de forma unívoca e instantánea en el catálogo local por Set, Número y/o Nombre.
@@ -82,7 +191,8 @@ class LocalCatalogService {
     final intNum = int.tryParse(cleanNum);
     final pad3 = cleanNum.isNotEmpty ? cleanNum.padLeft(3, '0') : cleanNum;
     final cleanCardNum = cardNumber.trim();
-    final cleanName = cardName?.trim().toLowerCase();
+    final repairedName = cardName != null ? repairOcrPokemonName(cardName) : null;
+    final cleanName = repairedName?.trim().toLowerCase();
 
     bool matchesCardName(Map<String, dynamic> row) {
       if (cleanName == null || cleanName.isEmpty) return true;
@@ -201,7 +311,7 @@ class LocalCatalogService {
     if (!_isInitialized || _db == null) await init();
     if (_db == null) return [];
 
-    final clean = query.trim();
+    final clean = repairOcrPokemonName(query.trim());
     if (clean.isEmpty) return [];
 
     // Priorizar resultados según el idioma deseado

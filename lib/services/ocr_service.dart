@@ -1,16 +1,17 @@
 // ============================================================
 // services/ocr_service.dart
 // Servicio de reconocimiento óptico de caracteres (OCR) local
-// usando Google ML Kit Text Recognition para cartas TCG:
-// Pokémon, Magic (MTG), Yu-Gi-Oh!, Digimon, One Piece, Lorcana, etc.
+// usando Google ML Kit Text Recognition exclusivo para Pokémon TCG.
 // Incorpora ordenación espacial (zonas superior e inferior de la carta),
+// priorización geométrica por altura de fuente (boundingBox.height),
 // normalización tolerante a fallos de OCR en números de colección,
-// filtrado estricto de indicadores de vida (HP/PS) y atributos,
-// y reconocimiento robusto multi-script para cartas asiáticas (JA, KO, ZH).
+// filtrado de subtítulos de evolución ("Evoluciona de..."), vida (HP/PS),
+// y corrección difusa (Levenshtein) contra las 1.025 especies Pokémon.
 // ============================================================
 
 import 'dart:io';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
+import 'local_catalog_service.dart';
 
 /// Idiomas soportados para el reconocimiento y búsqueda de cartas.
 enum CardLanguage {
@@ -51,46 +52,31 @@ class OcrResult {
   bool get isSuccessful => collectionNumber != null || pokemonName != null;
 }
 
-/// Servicio que encapsula la lógica de OCR multi-juego y multiidioma con ordenación espacial.
+/// Servicio que encapsula la lógica de OCR exclusivo para Pokémon TCG con ordenación espacial.
 class OcrService {
-  // Palabras comunes a ignorar de todos los TCG para evitar falsos positivos
+  // Palabras comunes de Pokémon TCG a ignorar para evitar falsos positivos
   static final Set<String> _ignoredWords = {
-    // ── Pokémon ──
     'BASIC', 'BASICO', 'BÁSICO', 'GASICO', 'GÁSICO', 'CASICO', 'PASICO',
     'STAGE', 'STAGE 1', 'STAGE 2', 'FASE', 'FASE 1', 'FASE 2',
     'POKEMON', 'POKÉMON', 'POKEMON BASICO', 'POKÉMON BÁSICO',
     'TRAINER', 'ENTRENADOR', 'SUPPORTER', 'PARTIDARIO', 'ITEM', 'OBJETO',
+    'STADIUM', 'ESTADIO', 'TOOL', 'HERRAMIENTA', 'HERRAMIENTA POKÉMON',
     'ENERGY', 'ENERGIA', 'ENERGÍA', 'VSTAR', 'VMAX', 'ABILITY', 'HABILIDAD',
     'WEAKNESS', 'DEBILIDAD', 'RESISTANCE', 'RESISTENCIA', 'RETREAT', 'RETIRADA',
     'RULE', 'REGLA', 'HP', 'PS', 'ILUS', 'ILLUS', 'ILLUST',
+    'EVOLVES', 'EVOLVES FROM', 'EVOLUCIONA', 'EVOLUCIONA DE',
+    'TERA', 'TERACRISTAL', 'ANCIENT', 'ANTIGUO', 'FUTURE', 'FUTURO',
+    'SINGLE STRIKE', 'RAPID STRIKE', 'FUSION STRIKE',
+    'GOLPE BRUSCO', 'GOLPE FLUIDO', 'GOLPE FUSIÓN',
     // Japonés Pokémon
     'たね', '1進化', '2進化', 'グッズ', 'サポート', 'スタジアム', 'トレーナーズ',
-    'エネルギー', '特性', '弱点', '抵抗力', 'にげる', 'ルール',
+    'ポケモンのどうぐ', 'エネルギー', '特性', '弱点', '抵抗力', 'にげる', 'ルール',
     // Coreano Pokémon
     '기본', '1진화', '2진화', '아이템', '서포트', '스타디움', '트레이너스',
-    '에너지', '특성', '약점', '저항力', '후퇴', '룰',
+    '에너지', '특성', '약점', '저항력', '후퇴', '룰',
     // Chino Pokémon
     '基础', '1阶进化', '2阶进化', '物品', '支援者', '竞技场', '训练家',
     '能量', '撤退', '规则',
-
-    // ── Magic: The Gathering (MTG) ──
-    'CREATURE', 'CRIATURA', 'SORCERY', 'CONJURO', 'INSTANT', 'INSTANTANEO',
-    'INSTANTÁNEO', 'ARTIFACT', 'ARTEFACTO', 'ENCHANTMENT', 'ENCANTAMIENTO',
-    'PLANESWALKER', 'LAND', 'TIERRA', 'LEGENDARY', 'LEYENDA', 'TRAMPLE',
-    'FLYING', 'VIGILANCE', 'DEATHTOUCH',
-
-    // ── Yu-Gi-Oh! ──
-    'MONSTER', 'MONSTRUO', 'SPELL', 'MAGIA', 'TRAP', 'TRAMPA', 'FUSION',
-    'FUSIÓN', 'SYNCHRO', 'SINCRONÍA', 'XYZ', 'PENDULUM', 'PÉNDULO', 'LINK',
-    'ENLACE', 'EFFECT', 'EFECTO', 'ATK', 'DEF', '1ST EDITION', 'EDICIÓN LIMITADA',
-
-    // ── Digimon ──
-    'DIGIMON', 'OPTION', 'OPCIÓN', 'TAMER', 'DOMADOR', 'DIGI-EGG', 'DIGIHUEVO',
-    'ROOKIE', 'CHAMPION', 'ULTIMATE', 'MEGA', 'VACCINE', 'VIRUS', 'DATA',
-
-    // ── One Piece ──
-    'LEADER', 'LÍDER', 'CHARACTER', 'PERSONAJE', 'EVENT', 'EVENTO',
-    'ESCENARIO', 'SLASH', 'STRIKE', 'DON!!', 'COUNTER', 'POWER', 'COST',
   };
 
   /// Reconoce texto de la imagen según el idioma seleccionado o auto-detección.
@@ -150,17 +136,12 @@ class OcrService {
     }
 
     // 3. En modo Auto, si la carta apunta a script asiático:
-    // Seleccionar el script asiático más probable para no ejecutar los 3 secuencialmente
+    // Usar únicamente el reconocedor más probable (Japonés cubre Kanji + Kana + Romaji en una sola pasada)
     final asianScripts = <(TextRecognitionScript, CardLanguage)>[];
-    if (RegExp(r'[\u3040-\u30FF]').hasMatch(latinResult.rawText) ||
-        RegExp(r'\b(s\d+[a-z]?|sv\d+[a-z]?)\b', caseSensitive: false).hasMatch(latinResult.rawText)) {
-      asianScripts.add((TextRecognitionScript.japanese, CardLanguage.ja));
-    } else if (RegExp(r'[\uAC00-\uD7AF]').hasMatch(latinResult.rawText)) {
+    if (RegExp(r'[\uAC00-\uD7AF]').hasMatch(latinResult.rawText)) {
       asianScripts.add((TextRecognitionScript.korean, CardLanguage.ko));
     } else {
       asianScripts.add((TextRecognitionScript.japanese, CardLanguage.ja));
-      asianScripts.add((TextRecognitionScript.chinese, CardLanguage.zh));
-      asianScripts.add((TextRecognitionScript.korean, CardLanguage.ko));
     }
 
     for (final (script, lang) in asianScripts) {
@@ -280,15 +261,18 @@ class OcrService {
       // Si aún no se encontró, probar en todo el texto concatenado
       collectionNumber ??= _extractCollectionNumber(rawText);
 
-      // ── 3. Extracción de Nombre de la Carta ────────────────────────────
-      // En cartas TCG, el nombre SIEMPRE está en el encabezado (primer 30% superior)
-      // y en el lateral izquierdo/central (NUNCA en la esquina superior derecha donde se ubica el HP/Coste)
+      // ── 3. Extracción de Nombre de la Carta Pokémon ────────────────────
+      // En cartas Pokémon, el nombre SIEMPRE está en el encabezado (primer 32% superior)
+      // con la tipografía de mayor altura (boundingBox.height) y a la izquierda del HP/PS.
       String? cardTitle;
 
       List<TextLine> topLines;
       if (hasValidCoordinates) {
         final topThreshold = minY + (totalHeight * 0.32);
         topLines = allLines.where((l) => l.boundingBox.top <= topThreshold).toList();
+        // Priorizar las líneas de mayor tamaño de fuente dentro del encabezado
+        // para elegir el nombre del Pokémon por encima del subtítulo "Evoluciona de..." o "FASE 1"
+        topLines.sort((a, b) => b.boundingBox.height.compareTo(a.boundingBox.height));
       } else {
         topLines = allLines.take(4).toList();
       }
@@ -304,12 +288,12 @@ class OcrService {
         }
       }
 
-      // Si no se encontró en el encabezado estricto, buscar en las líneas superiores (hasta 55%)
+      // Fallback acotado al 38% superior (evitando la zona central donde están los ataques y habilidades)
       if (cardTitle == null) {
         for (final line in allLines) {
           if (hasValidCoordinates) {
-            if (line.boundingBox.top > (minY + totalHeight * 0.55)) {
-              continue; // Evitar el pie de carta (ilustradores, números, legal)
+            if (line.boundingBox.top > (minY + totalHeight * 0.38)) {
+              continue;
             }
           }
           final leftRatio = (hasValidCoordinates && totalWidth > 50)
@@ -321,6 +305,11 @@ class OcrService {
             break;
           }
         }
+      }
+
+      // Aplicar corrección difusa (Levenshtein) contra las 1.025 especies oficiales de Pokémon
+      if (cardTitle != null) {
+        cardTitle = LocalCatalogService.instance.repairOcrPokemonName(cardTitle);
       }
 
       // ── 4. Detección de idioma según caracteres del título o texto ────
@@ -381,6 +370,12 @@ class OcrService {
     // Normalizar separadores y barras
     var normalized = text.replaceAll(RegExp(r'[|\\／]'), '/');
     normalized = normalized.replaceAll(RegExp(r'\s*/\s*'), '/');
+
+    // Limpiar marcas de regulación de torneo (D, E, F, G, H, I) y códigos de idioma intermedios (ES, EN, FR...)
+    // típicos del pie de carta moderno (ej: "G PAL ES 025/198" -> "PAL 025/198")
+    normalized = normalized
+        .replaceAll(RegExp(r'\b[D-J]\s+(?=[A-Za-z0-9]{2,6}\b)'), '')
+        .replaceAll(RegExp(r'\b(ES|EN|FR|DE|IT|PT)\s+(?=\d{1,4}/\d{1,4})', caseSensitive: false), '');
 
     // Reparar posibles barras accidentales introducidas por el OCR dentro de números (ej: "0/12/028" -> "012/028")
     normalized = normalized.replaceAllMapped(
@@ -447,20 +442,14 @@ class OcrService {
       }
     }
 
-    // 4. Código de Set con prefijo y número (ej: "s8a-012", "SV5K-005", "LOB-005", "ST1-03", "OP01-025", "BT1-025")
+    // 4. Código de Set con prefijo y número (ej: "s8a-012", "SV5K-005")
     final matchSetCode = RegExp(r'\b([A-Za-z0-9]{2,6}[A-Za-z0-9\.\-]*\s*[-–_]\s*\d{1,4})\b')
         .firstMatch(normalized);
     if (matchSetCode != null) {
       return matchSetCode.group(1)!.replaceAll(' ', '');
     }
 
-    // 5. Código Passcode Yu-Gi-Oh! (8 dígitos exactos)
-    final matchPasscode = RegExp(r'\b(\d{8})\b').firstMatch(normalized);
-    if (matchPasscode != null) {
-      return matchPasscode.group(1);
-    }
-
-    // 6. Número individual precedido de No. o # (ej: "No. 025", "#025", "Ref: 051")
+    // 5. Número individual precedido de No. o # (ej: "No. 025", "#025", "Ref: 051")
     final matchPrefixedNumber = RegExp(r'(?:no\.?|#|ref:?)\s*(\d{2,4})\b', caseSensitive: false)
         .firstMatch(normalized);
     if (matchPrefixedNumber != null) {
@@ -470,14 +459,14 @@ class OcrService {
     return null;
   }
 
-  /// Limpia y valida si una línea de texto corresponde al título de una carta.
+  /// Limpia y valida si una línea de texto corresponde al título de una carta Pokémon.
   String? _cleanAndValidateTitle(
     String line,
     String? collectionNumber, {
     double? lineLeftRatio,
   }) {
     // Si la línea está en el cuadrante derecho superior (> 58% del ancho),
-    // es la zona reservada para HP, tipo elemental, mana o atributo. Nunca es el título.
+    // es la zona reservada para HP/PS y tipo elemental. Nunca es el título.
     if (lineLeftRatio != null && lineLeftRatio > 0.58) {
       return null;
     }
@@ -486,12 +475,20 @@ class OcrService {
     if (trimmed.length < 2) return null;
     if (collectionNumber != null && trimmed.contains(collectionNumber)) return null;
 
+    // Descartar subtítulos de evolución ("Evoluciona de Charmander", "Evolves from Pikachu", "…から進化")
+    // y líneas de datos de Pokédex ("N.º 006", "Altura: 1,7 m", "Peso: 90,5 kg", "HT", "WT")
+    if (RegExp(
+      r'(evoluciona\s+de|evolves\s+from|put\s+on\s+the|coloca\s+sobre|から進化|에서\s*진화|進化自|进化自|\b(altura|peso|height|weight|length)\b)',
+      caseSensitive: false,
+    ).hasMatch(trimmed)) {
+      return null;
+    }
+
     // Descartar si es estrictamente numérico o sólo contiene dígitos y símbolos de puntuación
     if (RegExp(r'^\d+$').hasMatch(trimmed)) return null;
     if (RegExp(r'^[\d\s\.\,\:\;\-\/]+$').hasMatch(trimmed)) return null;
 
     // Descartar si contiene indicadores de vida (HP / PS) solos o combinados con números
-    // Ejemplos: "HP 120", "120 HP", "HP120", "120HP", "PS 120", "HP: 70", "120 PS", "HP"
     if (RegExp(r'\b(HP|PS)\b', caseSensitive: false).hasMatch(trimmed) &&
         RegExp(r'\d+').hasMatch(trimmed)) {
       return null;
@@ -500,18 +497,17 @@ class OcrService {
       return null;
     }
 
-    // Quitar indicadores de PS / HP / ATK / DEF / DP y números pegados
+    // Quitar indicadores de PS / HP y números pegados
     trimmed = trimmed
-        .replaceAll(RegExp(r'(?:HP|PS|ATK|DEF|DP)\s*[:/]?\s*\d+', caseSensitive: false), '')
-        .replaceAll(RegExp(r'\d+\s*(?:HP|PS|ATK|DEF|DP)', caseSensitive: false), '')
-        .replaceAll(RegExp(r'\b(HP|PS|ATK|DEF|DP)\b', caseSensitive: false), '')
-        .replaceAll(RegExp(r'\[(Monster|Spell|Trap|Creature|Monstruo|Magia|Trampa)\]', caseSensitive: false), '')
+        .replaceAll(RegExp(r'(?:HP|PS)\s*[:/]?\s*\d+', caseSensitive: false), '')
+        .replaceAll(RegExp(r'\d+\s*(?:HP|PS)', caseSensitive: false), '')
+        .replaceAll(RegExp(r'\b(HP|PS)\b', caseSensitive: false), '')
         .trim();
 
-    // Quitar palabras de descriptor de fase y tipos
+    // Quitar palabras de descriptor de fase y tipos de carta Pokémon
     trimmed = trimmed.replaceAll(
       RegExp(
-        r'\b(pok[eé]mon\s+)?(b[aá]sico|g[aá]sico|c[aá]sico|p[aá]sico|fase\s*\d*|stage\s*\d*|basic|creature|instant|sorcery|trap|spell|monster|trainer|supporter|item)\b',
+        r'\b(pok[eé]mon\s+)?(b[aá]sico|g[aá]sico|c[aá]sico|p[aá]sico|fase\s*\d*|stage\s*\d*|basic|trainer|entrenador|supporter|partidario|item|objeto|stadium|estadio)\b',
         caseSensitive: false,
       ),
       '',

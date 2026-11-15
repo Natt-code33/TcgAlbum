@@ -31,6 +31,41 @@ enum AlbumSortOption {
   const AlbumSortOption(this.label, this.icon);
 }
 
+enum PokemonAlbumFilter {
+  all('Todas', Icons.catching_pokemon, 0xFFFFB800),
+  es('🇪🇸 Español', Icons.flag_rounded, 0xFFFFB800),
+  en('🇬🇧 Inglés', Icons.public, 0xFF00E5FF),
+  ja('🇯🇵 Japonés', Icons.auto_awesome, 0xFFFF6B6B),
+  ko('🇰🇷 Coreano', Icons.translate_rounded, 0xFF9B59B6),
+  zh('🇨🇳 Chino', Icons.language_rounded, 0xFF4CD97B),
+  graded('🏆 Graduadas', Icons.workspace_premium_rounded, 0xFFE67E22);
+
+  final String label;
+  final IconData iconData;
+  final int colorHex;
+  const PokemonAlbumFilter(this.label, this.iconData, this.colorHex);
+
+  bool matches(PokemonCard card) {
+    switch (this) {
+      case PokemonAlbumFilter.all:
+        return true;
+      case PokemonAlbumFilter.es:
+        return (card.language ?? 'es').toLowerCase() == 'es';
+      case PokemonAlbumFilter.en:
+        return (card.language ?? '').toLowerCase() == 'en';
+      case PokemonAlbumFilter.ja:
+        return (card.language ?? '').toLowerCase() == 'ja';
+      case PokemonAlbumFilter.ko:
+        return (card.language ?? '').toLowerCase() == 'ko';
+      case PokemonAlbumFilter.zh:
+        final l = (card.language ?? '').toLowerCase();
+        return l == 'zh' || l == 'zh-tw' || l == 'zh-cn';
+      case PokemonAlbumFilter.graded:
+        return card.condition == CardCondition.graded;
+    }
+  }
+}
+
 class AlbumView extends StatefulWidget {
   const AlbumView({super.key});
 
@@ -51,7 +86,7 @@ class _AlbumViewState extends State<AlbumView> {
   bool _showSearchBar = false;
   String _searchQuery = '';
   AlbumSortOption _sortOption = AlbumSortOption.recent;
-  TcgGame _filterGame = TcgGame.all;
+  PokemonAlbumFilter _activeFilter = PokemonAlbumFilter.all;
 
   @override
   void initState() {
@@ -306,9 +341,7 @@ class _AlbumViewState extends State<AlbumView> {
   Future<void> _openScanner() async {
     await Navigator.of(context).push(
       MaterialPageRoute(
-        builder: (_) => ScannerView(
-          initialGame: _filterGame != TcgGame.all ? _filterGame : TcgGame.pokemon,
-        ),
+        builder: (_) => const ScannerView(),
       ),
     );
     await _loadAlbumsAndActive();
@@ -317,9 +350,7 @@ class _AlbumViewState extends State<AlbumView> {
   Future<void> _openManualEntry() async {
     final saved = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
-        builder: (_) => ManualCardView(
-          initialGame: _filterGame != TcgGame.all ? _filterGame : null,
-        ),
+        builder: (_) => const ManualCardView(),
       ),
     );
     if (saved == true) {
@@ -374,15 +405,30 @@ class _AlbumViewState extends State<AlbumView> {
 
     try {
       final currentCards = List<PokemonCard>.from(_cards);
-      for (int i = 0; i < currentCards.length; i++) {
-        final c = currentCards[i];
-        if (c.game == TcgGame.pokemon && !c.id.startsWith('custom_')) {
-          final detail = await _apiService.fetchCardDetail(
-            c.id,
-            lang: c.language ?? 'es',
-          );
+      const int batchSize = 6;
+
+      for (int start = 0; start < currentCards.length; start += batchSize) {
+        final end = (start + batchSize < currentCards.length)
+            ? start + batchSize
+            : currentCards.length;
+        final batchIndices = List<int>.generate(end - start, (i) => start + i);
+
+        final results = await Future.wait(
+          batchIndices.map((idx) async {
+            final c = currentCards[idx];
+            if (c.id.startsWith('custom_')) return null;
+            return _apiService.fetchCardDetail(
+              c.id,
+              lang: c.language ?? 'es',
+            );
+          }),
+        );
+
+        for (int j = 0; j < batchIndices.length; j++) {
+          final detail = results[j];
+          final idx = batchIndices[j];
           if (detail?.cardmarketPrices != null) {
-            currentCards[i] = c.copyWith(
+            currentCards[idx] = currentCards[idx].copyWith(
               cardmarketPrices: detail!.cardmarketPrices,
             );
             updatedCount++;
@@ -481,7 +527,7 @@ class _AlbumViewState extends State<AlbumView> {
                     style: GoogleFonts.outfit(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
                   ),
                 ),
-                GameBadge(game: card.game),
+                GameBadge(game: card.game, language: card.language),
               ],
             ),
             const SizedBox(height: 8),
@@ -686,9 +732,9 @@ class _AlbumViewState extends State<AlbumView> {
   }
 
   List<PokemonCard> get _filteredCards {
-    var list = _filterGame == TcgGame.all
+    var list = _activeFilter == PokemonAlbumFilter.all
         ? List<PokemonCard>.from(_cards)
-        : _cards.where((c) => c.game == _filterGame).toList();
+        : _cards.where(_activeFilter.matches).toList();
 
     if (_searchQuery.trim().isNotEmpty) {
       final q = _searchQuery.trim().toLowerCase();
@@ -1034,7 +1080,10 @@ class _AlbumViewState extends State<AlbumView> {
         } else if (action == '__delete__') {
           _deleteCurrentAlbum();
         } else {
-          final target = _albums.firstWhere((a) => a.id == action);
+          final target = _albums.firstWhere(
+            (a) => a.id == action,
+            orElse: () => _albums.first,
+          );
           _switchAlbum(target);
         }
       },
@@ -1129,30 +1178,31 @@ class _AlbumViewState extends State<AlbumView> {
     );
   }
 
-  // ── Chips de filtro por Franquicia ─────────────────────────────────────────
+  // ── Chips de filtro para Pokémon TCG (Por Idioma y Graduadas) ─────────────
   Widget _buildFilterChips() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
       child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         child: Row(
-          children: TcgGame.values.map((game) {
-            final isSelected = _filterGame == game;
-            final count = game == TcgGame.all
-                ? _cards.length
-                : _cards.where((c) => c.game == game).length;
-            final color = Color(game.colorHex);
+          children: PokemonAlbumFilter.values.map((filter) {
+            final isSelected = _activeFilter == filter;
+            final count = _cards.where(filter.matches).fold<int>(
+                  0,
+                  (sum, c) => sum + c.quantity,
+                );
+            final color = Color(filter.colorHex);
 
             return Padding(
               padding: const EdgeInsets.only(right: 8),
               child: ChoiceChip(
                 avatar: Icon(
-                  game.iconData,
+                  filter.iconData,
                   size: 14,
                   color: isSelected ? Colors.black : color,
                 ),
                 label: Text(
-                  '${game.label} ($count)',
+                  '${filter.label} ($count)',
                   style: GoogleFonts.outfit(
                     color: isSelected ? Colors.black : Colors.white70,
                     fontSize: 12,
@@ -1170,7 +1220,7 @@ class _AlbumViewState extends State<AlbumView> {
                   borderRadius: BorderRadius.circular(999),
                 ),
                 onSelected: (selected) {
-                  if (selected) setState(() => _filterGame = game);
+                  if (selected) setState(() => _activeFilter = filter);
                 },
               ),
             );
@@ -1297,7 +1347,7 @@ class _AlbumViewState extends State<AlbumView> {
   }
 
   Widget _buildEmptyState() {
-    final isFiltered = _filterGame != TcgGame.all;
+    final isFiltered = _activeFilter != PokemonAlbumFilter.all || _searchQuery.isNotEmpty;
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(32.0),
@@ -1319,14 +1369,14 @@ class _AlbumViewState extends State<AlbumView> {
             ),
             const SizedBox(height: 20),
             Text(
-              isFiltered ? 'No hay cartas de ${_filterGame.label}' : 'Tu álbum está vacío',
+              isFiltered ? 'No hay cartas para este filtro' : 'Tu álbum Pokémon está vacío',
               style: GoogleFonts.outfit(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
             Text(
               isFiltered
-                  ? 'Escanea cartas de ${_filterGame.label} con la cámara o añádelas manualmente.'
-                  : 'Empieza a coleccionar escaneando cartas de cualquier TCG con la cámara.',
+                  ? 'Prueba a cambiar el filtro de idioma o búsqueda.'
+                  : 'Empieza a coleccionar escaneando tus cartas Pokémon con la cámara.',
               style: GoogleFonts.inter(color: AppTheme.textMuted, fontSize: 13),
               textAlign: TextAlign.center,
             ),
@@ -1348,12 +1398,15 @@ class _AlbumViewState extends State<AlbumView> {
     );
   }
 
-  // ── Grid de cartas con margen inferior amplio para que nada se corte ─────
+  // ── Grid adaptable a móviles, phablets y tablets ─────────────────────────
   Widget _buildGrid(List<PokemonCard> cards) {
+    final screenWidth = MediaQuery.sizeOf(context).width;
+    final crossAxisCount = screenWidth >= 900 ? 4 : (screenWidth >= 600 ? 3 : 2);
+
     return GridView.builder(
       padding: const EdgeInsets.only(left: 14, right: 14, top: 12, bottom: 100),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2,
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: crossAxisCount,
         crossAxisSpacing: 12,
         mainAxisSpacing: 14,
         childAspectRatio: 0.61,
@@ -1472,11 +1525,11 @@ class _CardTile extends StatelessWidget {
                     ),
                   ),
 
-                  // Badge de franquicia con icono Material
+                  // Badge de idioma de la carta Pokémon
                   Positioned(
                     top: 8,
                     right: 8,
-                    child: GameBadge(game: card.game, showLabel: false, iconSize: 12),
+                    child: GameBadge(game: card.game, language: card.language, showLabel: true, fontSize: 9, iconSize: 12),
                   ),
 
                   // Badge de cantidad si hay copias repetidas (x2, x3...)

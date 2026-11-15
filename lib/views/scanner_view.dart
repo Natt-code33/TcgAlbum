@@ -390,7 +390,7 @@ class _ScannerViewState extends State<ScannerView> {
           initialNumber: _ocrResult?.collectionNumber,
           initialImage: _capturedImage,
           initialLanguage: _selectedLanguage,
-          initialGame: _selectedGame != TcgGame.all ? _selectedGame : null,
+          initialGame: TcgGame.pokemon,
         ),
       ),
     );
@@ -409,7 +409,7 @@ class _ScannerViewState extends State<ScannerView> {
 
     clean = clean.replaceAll(
       RegExp(
-        r'\b(pok[eé]mon\s+)?(b[aá]sico|g[aá]sico|c[aá]sico|p[aá]sico|fase\s*\d*|stage\s*\d*|basic|creature|instant|sorcery|trap|spell)\b',
+        r'\b(pok[eé]mon\s+)?(b[aá]sico|g[aá]sico|c[aá]sico|p[aá]sico|fase\s*\d*|stage\s*\d*|basic)\b',
         caseSensitive: false,
       ),
       ' ',
@@ -482,7 +482,7 @@ class _ScannerViewState extends State<ScannerView> {
     return Scaffold(
       backgroundColor: AppTheme.bgDark,
       appBar: AppBar(
-        title: Text('Escanear o Buscar Carta TCG',
+        title: Text('Escanear o Buscar Carta Pokémon',
             style: GoogleFonts.outfit(color: Colors.white, fontSize: 19, fontWeight: FontWeight.bold)),
         iconTheme: const IconThemeData(color: Colors.white),
         actions: [
@@ -502,12 +502,7 @@ class _ScannerViewState extends State<ScannerView> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-            // ── Selector de Franquicia TCG ────────────────────────────────
-            _buildGameSelector(),
-
-            const SizedBox(height: 10),
-
-            // ── Selector de Idioma (para todas las colecciones) ───────────
+            // ── Selector de Idioma (para todas las colecciones Pokémon) ────
             _buildLanguageSelector(),
             const SizedBox(height: 12),
 
@@ -561,78 +556,6 @@ class _ScannerViewState extends State<ScannerView> {
           ],
         ),
       ),
-      ),
-    );
-  }
-
-  // ── Selector de Franquicia TCG ─────────────────────────────────────────────
-  Widget _buildGameSelector() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: const Color(0xFF16213E),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.amber.withValues(alpha: 0.2)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Row(
-            children: [
-              Icon(Icons.style, color: Colors.amber, size: 18),
-              SizedBox(width: 8),
-              Text(
-                'Juego / Franquicia TCG:',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 13,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          SingleChildScrollView(
-            scrollDirection: Axis.horizontal,
-            child: Row(
-              children: TcgGame.values.map((game) {
-                final isSelected = _selectedGame == game;
-                final color = Color(game.colorHex);
-                return Padding(
-                  padding: const EdgeInsets.only(right: 6),
-                  child: ChoiceChip(
-                    avatar: Icon(game.iconData, size: 14, color: isSelected ? Colors.black : color),
-                    label: Text(
-                      game.label,
-                      style: TextStyle(
-                        color: isSelected ? Colors.black : Colors.white70,
-                        fontSize: 12,
-                        fontWeight:
-                            isSelected ? FontWeight.bold : FontWeight.normal,
-                      ),
-                    ),
-                    selected: isSelected,
-                    selectedColor: color,
-                    backgroundColor: const Color(0xFF0F3460),
-                    side: BorderSide(
-                      color: isSelected
-                          ? color
-                          : Colors.white24,
-                    ),
-                    onSelected: (selected) {
-                      if (selected) {
-                        setState(() => _selectedGame = game);
-                        if (_manualSearchController.text.trim().isNotEmpty) {
-                          _onManualSearch();
-                        }
-                      }
-                    },
-                  ),
-                );
-              }).toList(),
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -799,7 +722,7 @@ class _ScannerViewState extends State<ScannerView> {
           ),
           const SizedBox(height: 6),
           const Text(
-            'Nombre ("Black Lotus", "Ho-Oh"), número ("140") o código ("ST1-03", "OP01-025"):',
+            'Nombre ("Charizard ex", "Ho-Oh"), fracción ("113/094") o código ("TG14/TG30", "s8a 001/028"):',
             style: TextStyle(color: Colors.white60, fontSize: 12),
           ),
           const SizedBox(height: 10),
@@ -807,7 +730,7 @@ class _ScannerViewState extends State<ScannerView> {
             controller: _manualSearchController,
             style: const TextStyle(color: Colors.white),
             decoration: InputDecoration(
-              hintText: 'Ej: Black Lotus, Dark Magician, 140/195, OP01-025...',
+              hintText: 'Ej: Charizard ex, Pikachu, 140/195, TG14/TG30, s8a 001/028...',
               hintStyle: const TextStyle(color: Colors.white38),
               filled: true,
               fillColor: const Color(0xFF0F3460),
@@ -826,17 +749,16 @@ class _ScannerViewState extends State<ScannerView> {
           ),
           const SizedBox(height: 10),
 
-          // Chips de búsqueda rápida de diversos TCG
+          // Chips de búsqueda rápida de Pokémon TCG
           Wrap(
             spacing: 6,
             runSpacing: 4,
             children: [
-              _buildQuickChip('Ho-Oh 140/195', TcgGame.pokemon),
-              _buildQuickChip('Black Lotus', TcgGame.magic),
-              _buildQuickChip('Dark Magician', TcgGame.yugioh),
-              _buildQuickChip('Agumon ST1-03', TcgGame.digimon),
-              _buildQuickChip('Zoro OP01-025', TcgGame.onepiece),
-              _buildQuickChip('140', TcgGame.all),
+              _buildQuickChip('Ho-Oh 140/195'),
+              _buildQuickChip('Charizard ex'),
+              _buildQuickChip('Pikachu TG05/TG30'),
+              _buildQuickChip('s8a 001/028'),
+              _buildQuickChip('113/094'),
             ],
           ),
 
@@ -862,18 +784,15 @@ class _ScannerViewState extends State<ScannerView> {
     );
   }
 
-  Widget _buildQuickChip(String label, TcgGame game) {
+  Widget _buildQuickChip(String label) {
     return ActionChip(
-      avatar: Icon(game.iconData, size: 14, color: Color(game.colorHex)),
+      avatar: const Icon(Icons.catching_pokemon, size: 14, color: Colors.amber),
       label: Text(label,
           style: const TextStyle(color: Colors.white70, fontSize: 11)),
       backgroundColor: const Color(0xFF0F3460),
-      side: BorderSide(color: Color(game.colorHex).withValues(alpha: 0.4)),
+      side: BorderSide(color: Colors.amber.withValues(alpha: 0.4)),
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      onPressed: () {
-        setState(() => _selectedGame = game);
-        _onManualSearch(label);
-      },
+      onPressed: () => _onManualSearch(label),
     );
   }
 
@@ -1034,7 +953,7 @@ class _ScannerViewState extends State<ScannerView> {
                     fontWeight: FontWeight.bold),
               ),
               const Spacer(),
-              GameBadge(game: card.game),
+              GameBadge(game: card.game, language: card.language),
             ],
           ),
           const SizedBox(height: 12),
@@ -1268,7 +1187,7 @@ class _ResultCard extends StatelessWidget {
                             ),
                           ),
                         ],
-                        GameBadge(game: card.game, fontSize: 9, iconSize: 11),
+                        GameBadge(game: card.game, language: card.language, fontSize: 9, iconSize: 11),
                       ],
                     ),
                     const SizedBox(height: 4),

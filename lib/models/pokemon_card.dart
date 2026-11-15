@@ -1,28 +1,13 @@
 // ============================================================
 // models/pokemon_card.dart
-// Modelo de datos para cartas coleccionables TCG.
-// Soporta múltiples franquicias:
-// - Pokémon TCG
-// - Magic: The Gathering (MTG)
-// - Yu-Gi-Oh!
-// - Digimon Card Game
-// - One Piece Card Game
-// - Disney Lorcana
-// - Otros TCG
+// Modelo de datos exclusivo para cartas coleccionables Pokémon TCG.
 // ============================================================
 
 import 'package:flutter/material.dart';
 
-/// Juegos TCG soportados en la aplicación.
+/// Franquicia soportada (exclusivamente Pokémon TCG).
 enum TcgGame {
-  all(id: 'all', label: 'Todo / Auto', iconData: Icons.public, colorHex: 0xFF00E5FF),
-  pokemon(id: 'pokemon', label: 'Pokémon', iconData: Icons.bolt, colorHex: 0xFFFFB800),
-  magic(id: 'magic', label: 'Magic (MTG)', iconData: Icons.auto_awesome, colorHex: 0xFFE67E22),
-  yugioh(id: 'yugioh', label: 'Yu-Gi-Oh!', iconData: Icons.visibility, colorHex: 0xFF9B59B6),
-  digimon(id: 'digimon', label: 'Digimon', iconData: Icons.memory, colorHex: 0xFF3498DB),
-  onepiece(id: 'onepiece', label: 'One Piece', iconData: Icons.sailing, colorHex: 0xFFE74C3C),
-  lorcana(id: 'lorcana', label: 'Lorcana', iconData: Icons.auto_fix_high, colorHex: 0xFF1ABC9C),
-  other(id: 'other', label: 'Otro TCG', iconData: Icons.casino, colorHex: 0xFF95A5A6);
+  pokemon(id: 'pokemon', label: 'Pokémon TCG', iconData: Icons.catching_pokemon, colorHex: 0xFFFFB800);
 
   final String id;
   final String label;
@@ -36,12 +21,7 @@ enum TcgGame {
     required this.colorHex,
   });
 
-  static TcgGame fromId(String? id) {
-    return TcgGame.values.firstWhere(
-      (g) => g.id == id,
-      orElse: () => TcgGame.pokemon,
-    );
-  }
+  static TcgGame fromId(String? id) => TcgGame.pokemon;
 }
 
 /// Precios de mercado (Cardmarket en € y tendencias en $/€).
@@ -185,8 +165,6 @@ class PokemonCard {
     this.quantity = 1,
   });
 
-  static const double _usdToEurRate = 0.92;
-
   /// Verifica de forma segura si un string es una URL HTTP/HTTPS válida con host.
   static bool isValidNetworkUrl(String? url) {
     if (url == null || url.trim().isEmpty) return false;
@@ -290,167 +268,6 @@ class PokemonCard {
           : null,
       setPrintedTotal: (setData?['printedTotal'] as num?)?.toInt(),
       setTotal: (setData?['total'] as num?)?.toInt(),
-      language: 'en',
-    );
-  }
-
-  // ──────────────────────────────────────────────────────────────
-  // 2. Magic: The Gathering (Scryfall)
-  // ──────────────────────────────────────────────────────────────
-  factory PokemonCard.fromScryfall(Map<String, dynamic> json) {
-    final imgUris = json['image_uris'] as Map<String, dynamic>?;
-    final cardFaces = json['card_faces'] as List?;
-    final faceImg =
-        cardFaces?.firstOrNull?['image_uris'] as Map<String, dynamic>?;
-
-    final img = imgUris?['normal'] as String? ??
-        imgUris?['large'] as String? ??
-        faceImg?['normal'] as String? ??
-        '';
-
-    final prices = json['prices'] as Map<String, dynamic>?;
-    final eur = double.tryParse(prices?['eur']?.toString() ?? '');
-    final eurFoil = double.tryParse(prices?['eur_foil']?.toString() ?? '');
-    final usd = double.tryParse(prices?['usd']?.toString() ?? '');
-    final usdInEur = usd != null
-        ? double.parse((usd * _usdToEurRate).toStringAsFixed(2))
-        : null;
-
-    final effectiveAvgEur = eur ?? usdInEur;
-    final effectiveTrendEur = eurFoil ?? eur ?? usdInEur;
-
-    final printedName = json['printed_name'] as String?;
-    final engName = json['name'] as String? ?? 'Carta Magic';
-    final displayName = (printedName != null &&
-            printedName.isNotEmpty &&
-            printedName != engName)
-        ? '$printedName ($engName)'
-        : engName;
-
-    return PokemonCard(
-      id: 'mtg-${json['id']}',
-      name: displayName,
-      number: json['collector_number']?.toString() ?? '?',
-      setName: json['set_name'] as String? ?? 'Magic: The Gathering',
-      imageUrl: img,
-      game: TcgGame.magic,
-      cardmarketPrices: (effectiveAvgEur != null || effectiveTrendEur != null)
-          ? CardmarketPrices(
-              averageSellPrice: effectiveAvgEur,
-              trendPrice: effectiveTrendEur,
-            )
-          : null,
-      language: json['lang'] as String? ?? 'en',
-    );
-  }
-
-  // ──────────────────────────────────────────────────────────────
-  // 3. Yu-Gi-Oh! (YGOPRODeck)
-  // ──────────────────────────────────────────────────────────────
-  factory PokemonCard.fromYugioh(Map<String, dynamic> json,
-      {String? language}) {
-    final images = json['card_images'] as List?;
-    final imgUrl = (images?.firstOrNull as Map<String, dynamic>?)?['image_url']
-            as String? ??
-        '';
-
-    final sets = json['card_sets'] as List?;
-    final firstSet = sets?.firstOrNull as Map<String, dynamic>?;
-
-    final prices = json['card_prices'] as List?;
-    final firstPrice = prices?.firstOrNull as Map<String, dynamic>?;
-    final cmPrice = double.tryParse(
-      firstPrice?['cardmarket_price']?.toString() ?? '',
-    );
-
-    return PokemonCard(
-      id: 'ygo-${json['id']}',
-      name: json['name'] as String? ?? 'Carta Yu-Gi-Oh!',
-      number: firstSet?['set_code'] as String? ??
-          json['id']?.toString() ??
-          '?',
-      setName: firstSet?['set_name'] as String? ?? 'Yu-Gi-Oh!',
-      imageUrl: imgUrl,
-      game: TcgGame.yugioh,
-      cardmarketPrices:
-          cmPrice != null ? CardmarketPrices(averageSellPrice: cmPrice) : null,
-      language: language ?? 'en',
-    );
-  }
-
-  // ──────────────────────────────────────────────────────────────
-  // 4. Digimon Card Game (DigimonCard.io)
-  // ──────────────────────────────────────────────────────────────
-  factory PokemonCard.fromDigimon(Map<String, dynamic> json) {
-    final cardId = json['id']?.toString() ?? '';
-    final directImg = json['cardimage'] as String?;
-    final img = (directImg != null && directImg.isNotEmpty)
-        ? directImg
-        : (cardId.isNotEmpty
-            ? 'https://images.digimoncard.io/images/cards/$cardId.jpg'
-            : '');
-
-    final sets = json['set_name'];
-    final setName = sets is List
-        ? (sets.firstOrNull?.toString() ?? 'Digimon')
-        : (sets?.toString() ?? 'Digimon');
-
-    return PokemonCard(
-      id: 'digi-$cardId',
-      name: json['name'] as String? ?? 'Carta Digimon',
-      number: cardId.isNotEmpty ? cardId : '?',
-      setName: setName,
-      imageUrl: img,
-      game: TcgGame.digimon,
-      language: 'en',
-    );
-  }
-
-  // ──────────────────────────────────────────────────────────────
-  // 5. One Piece Card Game (OPTCG API)
-  // ──────────────────────────────────────────────────────────────
-  factory PokemonCard.fromOnePiece(Map<String, dynamic> json) {
-    final img = json['card_image'] as String? ?? '';
-    final cardSetId = json['card_set_id'] as String? ??
-        json['card_image_id'] as String? ??
-        '?';
-    final uniqueImageId = json['card_image_id'] as String? ?? cardSetId;
-    final usdPrice = double.tryParse(json['market_price']?.toString() ?? '') ??
-        double.tryParse(json['inventory_price']?.toString() ?? '');
-    final eurPrice = usdPrice != null
-        ? double.parse((usdPrice * _usdToEurRate).toStringAsFixed(2))
-        : null;
-
-    return PokemonCard(
-      id: 'op-$uniqueImageId',
-      name: json['card_name'] as String? ?? 'Carta One Piece',
-      number: cardSetId,
-      setName: json['set_name'] as String? ?? 'One Piece Card Game',
-      imageUrl: img,
-      game: TcgGame.onepiece,
-      cardmarketPrices:
-          eurPrice != null ? CardmarketPrices(averageSellPrice: eurPrice) : null,
-      language: 'en',
-    );
-  }
-
-  // ──────────────────────────────────────────────────────────────
-  // 6. Disney Lorcana (Lorcana API)
-  // ──────────────────────────────────────────────────────────────
-  factory PokemonCard.fromLorcana(Map<String, dynamic> json) {
-    final setKey = json['Set_ID'] ?? json['Set_Num'] ?? 'lor';
-    final numKey = json['Card_Num'] ?? json['Name'] ?? '?';
-    final uniqueId = json['Unique_ID'] ?? '$setKey-$numKey';
-
-    return PokemonCard(
-      id: 'lor-$uniqueId',
-      name: json['Name'] as String? ?? 'Carta Lorcana',
-      number: json['Card_Num']?.toString() ??
-          json['Unique_ID']?.toString() ??
-          '?',
-      setName: json['Set_Name'] as String? ?? 'Disney Lorcana',
-      imageUrl: json['Image'] as String? ?? '',
-      game: TcgGame.lorcana,
       language: 'en',
     );
   }
