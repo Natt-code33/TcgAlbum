@@ -18,6 +18,11 @@ void main() {
       expect(nameSimilarity('Char1zard', 'Charizard'), greaterThan(0.8));
       expect(nameSimilarity('Gardevo1r', 'Gardevoir'), greaterThan(0.8));
     });
+
+    test('nombres CJK con sufijo', () {
+      expect(nameSimilarity('喷火龙GX', '喷火龙'), 1);
+      expect(nameSimilarity('リザードンVMAX', 'リザードン'), 1);
+    });
   });
 
   test('normalizeName conserva entrenadores', () {

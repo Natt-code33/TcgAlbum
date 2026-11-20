@@ -42,6 +42,11 @@ void main() {
       'AR 025/165': ('025', '165', null),
       'AKRA 100/086': ('100', '086', null),
       'SV11B 104/086 AR': ('104', '086', 'SV11B'),
+      'S8a-G 003/015': ('003', '015', 'S8a-G'),
+      // Sets chinos: código en mayúsculas/minúsculas mezcladas.
+      'CSM2cC 005/150': ('005', '150', 'CSM2cC'),
+      'csm2cc 005/150': ('005', '150', 'csm2cc'),
+      'CBB2 001/015': ('001', '015', 'CBB2'),
       // El OCR japonés lee el 4 del pie como "a" y la rareza AR como "A".
       '10a/086': ('104', '086', null),
       'DBB 10a/086AR': ('104', '086', null),
@@ -65,6 +70,20 @@ void main() {
       expect(CardNumber.parse('HP 120'), isNull);
       expect(CardNumber.parse('PS 120/200'), isNull);
       expect(CardNumber.parse('SV4a'), isNull);
+    });
+
+    test('clearSetCode quita códigos inventados por el OCR', () {
+      const parsed = CardNumber(
+        kind: CardNumberKind.setFraction,
+        setCode: 'GXEE',
+        number: '005',
+        total: '150',
+      );
+      expect(parsed.setCode, 'GXEE');
+      final clean = parsed.clearSetCode();
+      expect(clean.setCode, isNull);
+      expect(clean.kind, CardNumberKind.fraction);
+      expect(clean.display, '005/150');
     });
   });
 }

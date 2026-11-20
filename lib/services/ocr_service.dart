@@ -140,6 +140,15 @@ class OcrService {
         }
       }
 
+      // Un código de set inventado ("GXEE") hace que el matcher descarte la
+      // carta correcta. Si no existe en el catálogo, se quita.
+      if (number != null && number.setCode != null) {
+        final ids = await LocalCatalogService.instance.allSetIds();
+        if (!ids.contains(number.setCode!.toLowerCase())) {
+          number = number.clearSetCode();
+        }
+      }
+
       // El set impreso es diminuto y el OCR lo suele estropear ("sv11b" ->
       // "DSM1B"/"SV18"). Se resuelve contra el catálogo usando la especie y el
       // total; así el matcher puede corregir un dígito del número.
@@ -239,6 +248,11 @@ class OcrService {
     if (full == null) return strip;
     if (strip == null) return full;
 
+    // Una fracción real del pie siempre gana a un número/promo suelto de la
+    // pasada completa, detecte o no el idioma asiático.
+    if (_isFraction(strip) && !_isFraction(full)) return strip;
+    if (_isFraction(full) && !_isFraction(strip)) return full;
+
     final asian = result.detectedLanguage == CardLanguage.ja ||
         result.detectedLanguage == CardLanguage.ko ||
         result.detectedLanguage == CardLanguage.zh;
@@ -303,10 +317,21 @@ class OcrService {
       language,
     );
 
-    // Validar si el título latino extraído es un nombre real (no un número de HP ni ruido)
+    // Validar si el título latino extraído es un nombre real (no un número de
+    // HP, un código de set ni ruido del ilustrador). El reconocedor latino no
+    // devuelve caracteres CJK, así que "S8a" o "DBB" no pueden tomarse por un
+    // nombre y cortar la pasada japonesa.
     final latinName = latinResult.pokemonName?.trim();
+    final looksLikeSetCode = latinName != null &&
+        (RegExp(r'^[A-Za-z]{1,4}\d+[A-Za-z]?(?:[-.][A-Za-z0-9]+)*$')
+                .hasMatch(latinName) ||
+            !RegExp(r'[aeiouAEIOU]').hasMatch(latinName));
+    final latinWords = latinName?.split(RegExp(r'\s+')) ?? const <String>[];
+    final hasStopWord = latinWords.any(CardNumber.isStopWord);
     final bool hasValidLatinName = latinName != null &&
         latinName.length >= 2 &&
+        !looksLikeSetCode &&
+        !hasStopWord &&
         !RegExp(r'^\d+$').hasMatch(latinName) &&
         !RegExp(r'\b(HP|PS|ATK|DEF)\b', caseSensitive: false).hasMatch(latinName) &&
         RegExp(r'[\p{L}]', unicode: true).allMatches(latinName).length >= 2;
@@ -316,18 +341,9 @@ class OcrService {
       return latinResult;
     }
 
-    // En modo Auto:
-    // Si tenemos nombre latino válido o indicios claros occidentales sin caracteres asiáticos, retornar de inmediato
+    // En modo Auto, sólo se evita la pasada asiática si NO hay ningún indicio
+    // asiático (ni caracteres CJK ni códigos de set como s8a/sv/sm).
     final hasAsianChars = RegExp(r'[\u3040-\u30FF\uAC00-\uD7AF\u4E00-\u9FFF]').hasMatch(latinResult.rawText);
-    final hasWesternKeywords = RegExp(r'\b(PS|HP|daño|básico|fase|stage|basic|damage|card|retreat)\b', caseSensitive: false).hasMatch(latinResult.rawText);
-
-    if ((hasValidLatinName && latinResult.collectionNumber != null && !hasAsianChars) ||
-        (hasValidLatinName && hasWesternKeywords && !hasAsianChars)) {
-      return latinResult;
-    }
-
-    // Si tampoco hay indicios asiáticos (ni caracteres CJK ni códigos de set como s8a, s12a, sv...),
-    // evitar las pasadas pesadas de japonés, coreano y chino
     final setCode = latinResult.cardNumber?.setCode;
     final hasJapaneseSetContext = setCode != null &&
         RegExp(r'^(s\d+|sv\d+|sm\d+)', caseSensitive: false)
@@ -337,45 +353,101 @@ class OcrService {
         RegExp(r'\b(s\d+[a-z]?|sv\d+[a-z]?)\b', caseSensitive: false).hasMatch(latinResult.rawText) ||
         (latinResult.collectionNumber != null && RegExp(r'\b(s\d+[a-z]?|sv\d+[a-z]?)\b', caseSensitive: false).hasMatch(latinResult.collectionNumber!));
 
-    if (!hasAsianContext && (hasValidLatinName || latinResult.collectionNumber != null)) {
+    // Un número en alfabeto latino no demuestra que la carta sea occidental:
+    // las japonesas también imprimen "003/015". Sólo se evita la pasada
+    // asiática cuando el título latino es un nombre real.
+    if (!hasAsianContext && hasValidLatinName) {
       return latinResult;
     }
 
     // 3. En modo Auto, si la carta apunta a script asiático:
-    // Usar únicamente el reconocedor más probable (Japonés cubre Kanji + Kana + Romaji en una sola pasada)
+    // Usar únicamente el reconocedor más probable.
     final asianScripts = <(TextRecognitionScript, CardLanguage)>[];
-    if (RegExp(r'[\uAC00-\uD7AF]').hasMatch(latinResult.rawText)) {
+    final hasHangul = RegExp(r'[\uAC00-\uD7AF]').hasMatch(latinResult.rawText);
+    final hasKana =
+        RegExp(r'[\u3040-\u30FF]').hasMatch(latinResult.rawText);
+    final hasHan = RegExp(r'[\u4E00-\u9FFF]').hasMatch(latinResult.rawText);
+    if (hasHangul) {
       asianScripts.add((TextRecognitionScript.korean, CardLanguage.ko));
-    } else {
+    } else if (hasKana) {
       asianScripts.add((TextRecognitionScript.japanese, CardLanguage.ja));
+    } else if (hasHan) {
+      // Han sin kana: probablemente chino, pero el japonés también usa kanji.
+      // Se prueban ambos y gana el que produzca una especie conocida.
+      asianScripts.add((TextRecognitionScript.chinese, CardLanguage.zh));
+      asianScripts.add((TextRecognitionScript.japanese, CardLanguage.ja));
+    } else {
+      // El reconocedor latino descarta los CJK, así que no saber el script no
+      // significa que la carta sea occidental.
+      asianScripts.add((TextRecognitionScript.japanese, CardLanguage.ja));
+      asianScripts.add((TextRecognitionScript.chinese, CardLanguage.zh));
     }
 
+    final asianRaw = StringBuffer();
+    CardNumber? asianNumber;
+    OcrResult? bestAsian;
+    CardLanguage? bestAsianLang;
+    var bestAsianScore = -1;
+
     for (final (script, lang) in asianScripts) {
-      final asianResult = await _runRecognition(inputImage, script, lang);
+      final OcrResult asianResult;
+      try {
+        asianResult = await _runRecognition(inputImage, script, lang);
+      } catch (_) {
+        // Si el modelo de ese script no está disponible en el dispositivo,
+        // probar el siguiente en vez de romper todo el escaneo.
+        continue;
+      }
+      asianRaw.writeln(asianResult.rawText);
+      asianNumber ??= asianResult.cardNumber;
+
       final asianName = asianResult.pokemonName?.trim();
       final hasValidAsianName = asianName != null &&
           asianName.length >= 2 &&
           !RegExp(r'^\d+$').hasMatch(asianName) &&
           !RegExp(r'\b(HP|PS)\b', caseSensitive: false).hasMatch(asianName);
+      final asianHasCjk = asianName != null &&
+          RegExp(r'[\u3040-\u30FF\uAC00-\uD7AF\u4E00-\u9FFF]')
+              .hasMatch(asianName);
 
-      if (hasValidAsianName) {
-        return OcrResult(
-          cardNumber: latinResult.cardNumber ?? asianResult.cardNumber,
-          pokemonName: asianResult.pokemonName,
-          detectedLanguage: asianResult.detectedLanguage != CardLanguage.auto
-              ? asianResult.detectedLanguage
-              : lang,
-          rawText: '${latinResult.rawText}\n${asianResult.rawText}',
-        );
+      if (!hasValidAsianName) continue;
+      // Si el nombre asiático es latino y ya teníamos un nombre latino válido,
+      // no lo pisamos: evita etiquetar cartas occidentales como japonesas.
+      if (!asianHasCjk && hasValidLatinName) continue;
+
+      // Gana el script que reconoce una especie real del catálogo. Así una
+      // carta china no se queda con el kanji que "adivina" el japonés.
+      var score = asianHasCjk ? 1 : 0;
+      if (asianHasCjk &&
+          LocalCatalogService.instance.isKnownSpecies(asianName)) {
+        score = 2;
       }
+      if (score > bestAsianScore) {
+        bestAsianScore = score;
+        bestAsian = asianResult;
+        bestAsianLang = lang;
+      }
+      if (score == 2) break;
     }
 
-    // Si ningún script asiático encontró nombre, devolver el mejor resultado posible
+    if (bestAsian != null && bestAsianScore > 0) {
+      return OcrResult(
+        cardNumber: latinResult.cardNumber ?? bestAsian.cardNumber,
+        pokemonName: bestAsian.pokemonName,
+        detectedLanguage: bestAsian.detectedLanguage != CardLanguage.auto
+            ? bestAsian.detectedLanguage
+            : bestAsianLang!,
+        rawText: '${latinResult.rawText}\n${bestAsian.rawText}',
+      );
+    }
+
+    // Si ningún script asiático encontró nombre, conservar igualmente su texto
+    // (sirve para resolver el set) y su número si el latino no lo encontró.
     return OcrResult(
-      cardNumber: latinResult.cardNumber,
+      cardNumber: latinResult.cardNumber ?? asianNumber,
       pokemonName: hasValidLatinName ? latinResult.pokemonName : null,
       detectedLanguage: latinResult.detectedLanguage,
-      rawText: latinResult.rawText,
+      rawText: '${latinResult.rawText}\n$asianRaw',
     );
   }
 
@@ -585,6 +657,26 @@ class OcrService {
     }
   }
 
+  /// Recupera una fracción cuyo OCR perdió la barra: "oos1so" -> "005/150".
+  CardNumber? _parseCompressedFraction(String line) {
+    final match = RegExp(r'[0-9OoSsIlBbZzGgDdQqAa]{5,7}').firstMatch(line);
+    if (match == null) return null;
+    final repaired = match.group(0)!
+        .replaceAll(RegExp(r'[OoDdQq]'), '0')
+        .replaceAll(RegExp(r'[Il]'), '1')
+        .replaceAll(RegExp(r'[Ss]'), '5')
+        .replaceAll(RegExp(r'[Bb]'), '8')
+        .replaceAll(RegExp(r'[Zz]'), '2')
+        .replaceAll(RegExp(r'[Gg]'), '6')
+        .replaceAll(RegExp(r'[Aa]'), '4');
+    if (!RegExp(r'^\d{5,7}$').hasMatch(repaired)) return null;
+    return CardNumber(
+      kind: CardNumberKind.fraction,
+      number: repaired.substring(0, repaired.length - 3),
+      total: repaired.substring(repaired.length - 3),
+    );
+  }
+
   /// Fallback: recorta la franja inferior de la foto y busca allí el número.
   /// Devuelve también el texto reconocido para poder resolver el set.
   Future<(CardNumber?, String)> _extractNumberFromStrip(File imageFile) async {
@@ -636,6 +728,67 @@ class OcrService {
           best = parsed;
           bestPriority = priority;
           if (priority >= 3 && parsed.setCode != null) break;
+        }
+      }
+
+      if (best == null) {
+        // En tipografía diminuta ML Kit pierde la barra: "005/150" -> "oos1so".
+        for (final line in rawStrip.split('\n')) {
+          best = _parseCompressedFraction(line);
+          if (best != null) break;
+        }
+      }
+
+      // Pasada adicional sobre la esquina inferior izquierda. En cartas foil
+      // el texto del pie se pierde entre reflejos; recortando sólo esa zona y
+      // subiendo el contraste el número vuelve a ser legible.
+      File? cornerTemp;
+      try {
+        final cornerY = (decoded.height * 0.88)
+            .round()
+            .clamp(0, decoded.height - 1)
+            .toInt();
+        final cornerWidth = (decoded.width * 0.45)
+            .round()
+            .clamp(60, decoded.width)
+            .toInt();
+        var corner = img.copyCrop(
+          decoded,
+          x: 0,
+          y: cornerY,
+          width: cornerWidth,
+          height: decoded.height - cornerY,
+        );
+        corner = img.contrast(img.grayscale(corner), contrast: 180);
+        corner = img.copyResize(
+          corner,
+          width: 2000,
+          interpolation: img.Interpolation.linear,
+        );
+        cornerTemp = File(p.join(
+          dir.path,
+          'ocr_corner_${DateTime.now().microsecondsSinceEpoch}.png',
+        ));
+        await cornerTemp.writeAsBytes(img.encodePng(corner), flush: true);
+
+        final cornerText = await _recognizer(TextRecognitionScript.latin)
+            .processImage(InputImage.fromFile(cornerTemp));
+        CardNumber? cornerNumber;
+        for (final line in cornerText.text.split('\n')) {
+          final parsed = _extractCardNumber(line);
+          if (parsed != null && _cardNumberPriority(parsed) >= 3) {
+            cornerNumber = parsed;
+            break;
+          }
+          cornerNumber ??= _parseCompressedFraction(line);
+        }
+        if (cornerNumber != null) best = cornerNumber;
+      } catch (_) {
+      } finally {
+        if (cornerTemp != null) {
+          try {
+            await cornerTemp.delete();
+          } catch (_) {}
         }
       }
 
@@ -723,13 +876,10 @@ class OcrService {
       final candidate = match.group(1)!;
       final upper = candidate.toUpperCase();
       if (CardNumber.isStopWord(upper)) continue;
-      if (!RegExp(r'[0-9]').hasMatch(candidate)) {
-        final isUpper = candidate == candidate.toUpperCase();
-        final isLowerHyphen =
-            RegExp(r'^[a-z]{1,4}-[a-z]{1,4}$').hasMatch(candidate);
-        if (candidate.length > 4 || (!isUpper && !isLowerHyphen)) {
-          continue;
-        }
+      final isLowerHyphen =
+          RegExp(r'^[a-z]{1,4}-[a-z]{1,4}$').hasMatch(candidate);
+      if (!RegExp(r'[0-9]').hasMatch(candidate) && !isLowerHyphen) {
+        continue;
       }
       return candidate;
     }

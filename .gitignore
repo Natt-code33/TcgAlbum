@@ -60,3 +60,10 @@ GoogleService-Info.plist
 
 # Widget Preview related
 .widget_preview/
+
+# Catálogo PriceCharting (se regenera con tools/scrape_pricecharting.py)
+/tools/pc_sets/
+/tools/pl_sets/
+
+# GitHub workflows (requieren permiso 'workflow' en el Personal Access Token)
+.github/

@@ -3,9 +3,11 @@
 // Punto de entrada de la aplicación PokéÁlbum.
 // ============================================================
 
+import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/material.dart';
+import 'services/catalog_sync_service.dart';
 import 'views/album_view.dart';
 import 'theme/app_theme.dart';
 
@@ -25,6 +27,11 @@ void main() {
   // El catálogo SQLite se inicializa de forma lazy en la primera búsqueda.
   // Así no se bloquea el primer frame con la copia de 12,5 MB.
   runApp(const PokemonAlbumApp());
+
+  // Tras el primer frame, buscar sets nuevos en TCGdex sin bloquear la UI.
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    unawaited(CatalogSyncService.instance.syncIfDue());
+  });
 }
 
 class PokemonAlbumApp extends StatelessWidget {

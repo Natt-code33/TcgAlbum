@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:developer' as developer;
 import 'dart:io';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
 import 'package:path/path.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
@@ -20,9 +22,44 @@ class LocalCatalogService {
   static const String _kCatalogVersionKey = 'tcg_catalog_db_version';
   static const int _currentCatalogVersion = 4;
 
+  /// Cartas/sets que no existen en TCGdex ni en pokemontcg.io (productos
+  /// japoneses exclusivos). Se insertan en la copia local del catálogo.
+  static const String _kExtrasVersionKey = 'tcg_catalog_extras_version';
+  static const int _currentExtrasVersion = 1;
+  static const String _extrasAsset = 'assets/data/catalog_extras.json';
+
+  /// Catálogo completo de PriceCharting (todas las colecciones, incluidas las
+  /// que TCGdex no indexa). Se genera con tools/build_pricecharting_catalog.py.
+  static const String _kPcVersionKey = 'tcg_catalog_pc_version';
+  static const int _currentPcVersion = 1795178524;
+  static const String _pcAsset = 'assets/data/catalog_pricecharting.json';
+  static const String _kPcCheckedKey = 'tcg_catalog_pc_checked';
+  static const String _pcRemoteUrl =
+      'https://raw.githubusercontent.com/Natt-code33/TcgAlbum/main/assets/data/catalog_pricecharting.json';
+
+  /// Copia publicada del JSON de extras. Permite añadir productos especiales
+  /// nuevos sin publicar otra APK: basta con actualizar el archivo en el repo.
+  static const String _extrasRemoteUrl =
+      'https://raw.githubusercontent.com/Natt-code33/TcgAlbum/main/assets/data/catalog_extras.json';
+
+  static const Set<String> _setColumns = {
+    'id', 'name', 'name_es', 'name_en', 'name_ja', 'name_ko', 'name_zh',
+    'name_fr', 'name_de', 'name_it', 'name_pt', 'name_th', 'name_id',
+    'code', 'official_count', 'total_count', 'language',
+  };
+
+  static const Set<String> _cardColumns = {
+    'id', 'set_id', 'local_id', 'number_int', 'total_in_set', 'name_ja',
+    'name_en', 'name_es', 'name_ko', 'name_zh', 'name_fr', 'name_de',
+    'name_it', 'name_pt', 'name_th', 'name_id', 'image_url',
+    'cardmarket_id', 'game',
+  };
+
   Database? _db;
+  String? _catalogPath;
   bool _isInitialized = false;
   Completer<void>? _initCompleter;
+  Future<void> _writeQueue = Future<void>.value();
   final List<String> _latinSpeciesCache = [];
   final List<String> _cjkSpeciesCache = [];
   final Set<String> _exactSpeciesLower = {};
@@ -56,6 +93,7 @@ class LocalCatalogService {
     try {
       final databasesPath = await getDatabasesPath();
       final path = join(databasesPath, 'tcg_catalog.db');
+      _catalogPath = path;
       final file = File(path);
 
       final prefs = await SharedPreferences.getInstance();
@@ -70,7 +108,28 @@ class LocalCatalogService {
         await Directory(dirname(path)).create(recursive: true);
         await file.writeAsBytes(bytes, flush: true);
         await prefs.setInt(_kCatalogVersionKey, _currentCatalogVersion);
+        // El catálogo recién copiado no lleva los extras: hay que reaplicarlos.
+        await prefs.remove(_kExtrasVersionKey);
+        await prefs.remove(_kPcVersionKey);
         developer.log('tcg_catalog.db copiado con éxito (${bytes.length} bytes)', name: 'LocalCatalogService');
+      }
+
+      final installedExtras = prefs.getInt(_kExtrasVersionKey) ?? 0;
+      if (installedExtras != _currentExtrasVersion) {
+        await _applyCatalogExtras(path);
+        await prefs.setInt(_kExtrasVersionKey, _currentExtrasVersion);
+      }
+
+      final installedPc = prefs.getInt(_kPcVersionKey) ?? 0;
+      if (installedPc < _currentPcVersion) {
+        final applied = await _applyBundledAsset(
+          path,
+          _pcAsset,
+          'PriceCharting',
+        );
+        if (applied > 0) {
+          await prefs.setInt(_kPcVersionKey, applied);
+        }
       }
 
       _db = await openDatabase(path, readOnly: true);
@@ -78,6 +137,11 @@ class LocalCatalogService {
       _isInitialized = true;
       developer.log('Base de datos SQLite local conectada con éxito.', name: 'LocalCatalogService');
       _initCompleter!.complete();
+
+      // Sin bloquear el arranque: si hay una versión remota más nueva del
+      // JSON de extras, se aplica en segundo plano.
+      unawaited(_syncRemoteExtras(path, prefs));
+      unawaited(_syncRemotePricecharting(path, prefs));
     } catch (e) {
       developer.log('Error inicializando catálogo local: $e', name: 'LocalCatalogService');
       if (!_initCompleter!.isCompleted) {
@@ -86,6 +150,180 @@ class LocalCatalogService {
     } finally {
       _initCompleter = null;
     }
+  }
+
+  /// Aplica un JSON de catálogo empaquetado en los assets y devuelve su
+  /// versión (0 si falla).
+  Future<int> _applyBundledAsset(
+    String path,
+    String asset,
+    String label,
+  ) async {
+    try {
+      final raw = await rootBundle.loadString(asset);
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) return 0;
+      await _applyExtrasData(path, decoded);
+      final version = (decoded['version'] as num?)?.toInt() ?? 0;
+      developer.log('Catálogo $label v$version aplicado.',
+          name: 'LocalCatalogService');
+      return version;
+    } catch (e) {
+      developer.log('No se pudo aplicar el catálogo $label: $e',
+          name: 'LocalCatalogService');
+      return 0;
+    }
+  }
+
+  /// Aplica en segundo plano la versión remota del catálogo de PriceCharting.
+  /// Se comprueba como máximo una vez al día para no gastar datos.
+  Future<void> _syncRemotePricecharting(
+    String path,
+    SharedPreferences prefs,
+  ) async {
+    try {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final lastCheck = prefs.getInt(_kPcCheckedKey) ?? 0;
+      const day = Duration(hours: 24);
+      if (now - lastCheck < day.inMilliseconds) return;
+
+      final response = await http
+          .get(Uri.parse(_pcRemoteUrl))
+          .timeout(const Duration(seconds: 30));
+      await prefs.setInt(_kPcCheckedKey, now);
+      if (response.statusCode != 200) return;
+
+      final decoded = jsonDecode(response.body);
+      if (decoded is! Map<String, dynamic>) return;
+
+      final version = (decoded['version'] as num?)?.toInt() ?? 0;
+      final applied = prefs.getInt(_kPcVersionKey) ?? 0;
+      if (version <= applied) return;
+
+      await _applyExtrasData(path, decoded);
+      await prefs.setInt(_kPcVersionKey, version);
+      developer.log('Catálogo PriceCharting remoto aplicado: v$version.',
+          name: 'LocalCatalogService');
+    } catch (e) {
+      developer.log('No se pudo sincronizar PriceCharting: $e',
+          name: 'LocalCatalogService');
+    }
+  }
+
+  /// Aplica el JSON de extras sobre la copia local del catálogo. Es
+  /// idempotente: se ejecuta una vez por versión de extras.
+  Future<void> _applyCatalogExtras(String path) async {
+    try {
+      final raw = await rootBundle.loadString(_extrasAsset);
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) return;
+      await _applyExtrasData(path, decoded);
+      developer.log('Extras de catálogo locales aplicados.',
+          name: 'LocalCatalogService');
+    } catch (e) {
+      developer.log('No se pudieron aplicar los extras: $e',
+          name: 'LocalCatalogService');
+    }
+  }
+
+  /// Aplica en segundo plano la versión remota del JSON de extras.
+  /// Si no hay red o el archivo no ha cambiado, no hace nada.
+  Future<void> _syncRemoteExtras(String path, SharedPreferences prefs) async {
+    try {
+      final response = await http
+          .get(Uri.parse(_extrasRemoteUrl))
+          .timeout(const Duration(seconds: 6));
+      if (response.statusCode != 200) return;
+
+      final decoded = jsonDecode(response.body);
+      if (decoded is! Map<String, dynamic>) return;
+
+      final version = (decoded['version'] as num?)?.toInt() ?? 0;
+      final applied = prefs.getInt(_kExtrasVersionKey) ?? 0;
+      if (version <= applied) return;
+
+      await _applyExtrasData(path, decoded);
+      await prefs.setInt(_kExtrasVersionKey, version);
+      developer.log('Extras remotos aplicados: versión $version.',
+          name: 'LocalCatalogService');
+    } catch (e) {
+      developer.log('No se pudo sincronizar el JSON remoto: $e',
+          name: 'LocalCatalogService');
+    }
+  }
+
+  Future<void> _applyExtrasData(
+    String path,
+    Map<String, dynamic> decoded,
+  ) async {
+    final sets = decoded['sets'];
+    final cards = decoded['cards'];
+    if ((sets is! List || sets.isEmpty) && (cards is! List || cards.isEmpty)) {
+      return;
+    }
+
+    await _serializeWrite(() async {
+      final db = await openDatabase(path);
+      try {
+        await db.transaction((txn) async {
+          if (sets is List) {
+            for (final item in sets) {
+              if (item is! Map) continue;
+              final row = _filterColumns(item, _setColumns);
+              if (row.isEmpty) continue;
+              await txn.insert(
+                'sets',
+                row,
+                conflictAlgorithm: ConflictAlgorithm.replace,
+              );
+            }
+          }
+          if (cards is List) {
+            for (final item in cards) {
+              if (item is! Map) continue;
+              final row = _filterColumns(item, _cardColumns);
+              if (row.isEmpty) continue;
+              await txn.insert(
+                'cards',
+                row,
+                conflictAlgorithm: ConflictAlgorithm.replace,
+              );
+            }
+          }
+        });
+      } finally {
+        await db.close();
+      }
+    });
+    _setTotalsCache = null;
+  }
+
+  /// Serializa las escrituras al catálogo (extras + sync) para que dos
+  /// conexiones escribiendo a la vez no se bloqueen.
+  Future<T> _serializeWrite<T>(Future<T> Function() action) {
+    final completer = Completer<T>();
+    _writeQueue = _writeQueue.then((_) async {
+      try {
+        completer.complete(await action());
+      } catch (error, stack) {
+        completer.completeError(error, stack);
+      }
+    });
+    return completer.future;
+  }
+
+  static Map<String, dynamic> _filterColumns(
+    Map item,
+    Set<String> allowed,
+  ) {
+    final row = <String, dynamic>{};
+    for (final entry in item.entries) {
+      final key = entry.key;
+      if (key is String && allowed.contains(key) && entry.value != null) {
+        row[key] = entry.value;
+      }
+    }
+    return row;
   }
 
   Future<void> _loadSpeciesCache() async {
@@ -251,6 +489,17 @@ class LocalCatalogService {
     return best;
   }
 
+  /// ¿El nombre corresponde a una especie oficial? Se usa para decidir entre
+  /// el reconocedor chino y el japonés cuando ambos devuelven CJK.
+  bool isKnownSpecies(String name) {
+    final clean = name.trim().toLowerCase();
+    if (clean.isEmpty) return false;
+    if (_exactSpeciesLower.contains(clean)) return true;
+    final suffix = RegExp(r'^(.*?)\s*(ex|gx|v|vmax|vstar)$').firstMatch(clean);
+    final base = (suffix?.group(1) ?? clean).trim();
+    return base.isNotEmpty && _exactSpeciesLower.contains(base);
+  }
+
   /// Corrige errores típicos de OCR en nombres de Pokémon usando distancia Levenshtein
   /// contra las 1.025 especies oficiales (ej: "Char1zard ex" -> "Charizard ex", "Gardevo1r" -> "Gardevoir").
   String repairOcrPokemonName(String rawName) {
@@ -383,6 +632,64 @@ class LocalCatalogService {
       curr = tmp;
     }
     return prev[m];
+  }
+
+  /// Sets con cartas, para el selector guiado (fallback cuando el OCR falla).
+  Future<List<Map<String, dynamic>>> setsForPicker() async {
+    if (!_isInitialized || _db == null) await init();
+    if (_db == null) return <Map<String, dynamic>>[];
+    return _db!.rawQuery(
+      'SELECT s.id, s.name, s.name_en, s.name_ja, s.name_zh, '
+      'COUNT(c.id) AS card_count FROM sets s '
+      'JOIN cards c ON c.set_id = s.id '
+      'GROUP BY s.id ORDER BY card_count DESC, s.id ASC',
+    );
+  }
+
+  /// Cartas de un set ordenadas por número, para el selector guiado.
+  Future<List<PokemonCard>> cardsInSet(
+    String setId,
+    CardLanguage language,
+  ) async {
+    if (!_isInitialized || _db == null) await init();
+    if (_db == null) return <PokemonCard>[];
+    final rows = await _db!.rawQuery(
+      '$_cardSelect WHERE lower(c.set_id) = ? '
+      'ORDER BY c.number_int ASC, c.local_id ASC LIMIT 600',
+      [setId.toLowerCase()],
+    );
+    return rows.map((row) => _mapRowToCard(row, language)).toList();
+  }
+
+  /// Devuelve cartas por id (para el índice visual), conservando el orden de
+  /// los ids recibidos (más parecido primero).
+  Future<List<PokemonCard>> cardsByIds(
+    List<String> ids,
+    CardLanguage language,
+  ) async {
+    if (!_isInitialized || _db == null) await init();
+    if (_db == null || ids.isEmpty) return <PokemonCard>[];
+
+    final rowsById = <String, Map<String, dynamic>>{};
+    for (var start = 0; start < ids.length; start += 200) {
+      final chunk = ids.skip(start).take(200).toList(growable: false);
+      final placeholders = List.filled(chunk.length, '?').join(',');
+      final rows = await _db!.rawQuery(
+        '$_cardSelect WHERE c.id IN ($placeholders)',
+        chunk,
+      );
+      for (final row in rows) {
+        final id = row['id'] as String?;
+        if (id != null) rowsById[id] = row;
+      }
+    }
+
+    final cards = <PokemonCard>[];
+    for (final id in ids) {
+      final row = rowsById[id];
+      if (row != null) cards.add(_mapRowToCard(row, language));
+    }
+    return cards;
   }
 
   /// Busca una carta de forma unívoca e instantánea en el catálogo local.
@@ -623,6 +930,61 @@ class LocalCatalogService {
     } catch (_) {
       return [];
     }
+  }
+
+  /// IDs de todos los sets ya presentes en el catálogo local.
+  Future<Set<String>> allSetIds() async {
+    if (!_isInitialized || _db == null) await init();
+    if (_db == null) return <String>{};
+    final rows = await _db!.rawQuery('SELECT id FROM sets');
+    return rows
+        .map((row) => (row['id'] as String? ?? '').toLowerCase())
+        .where((id) => id.isNotEmpty)
+        .toSet();
+  }
+
+  /// Inserta sets/cartas descubiertos por el sync (TCGdex). No toca el álbum
+  /// del usuario: escribe en la copia local del catálogo.
+  Future<void> mergeSyncedCatalog(
+    List<Map<String, dynamic>> sets,
+    List<Map<String, dynamic>> cards,
+  ) async {
+    if (!_isInitialized || _db == null) await init();
+    final path = _catalogPath;
+    if (path == null || (sets.isEmpty && cards.isEmpty)) return;
+
+    await _serializeWrite(() async {
+      final db = await openDatabase(path);
+      try {
+        await db.transaction((txn) async {
+          for (final item in sets) {
+            final row = _filterColumns(item, _setColumns);
+            if (row.isEmpty) continue;
+            await txn.insert(
+              'sets',
+              row,
+              conflictAlgorithm: ConflictAlgorithm.replace,
+            );
+          }
+          for (final item in cards) {
+            final row = _filterColumns(item, _cardColumns);
+            if (row.isEmpty) continue;
+            await txn.insert(
+              'cards',
+              row,
+              conflictAlgorithm: ConflictAlgorithm.replace,
+            );
+          }
+        });
+      } finally {
+        await db.close();
+      }
+    });
+    _setTotalsCache = null;
+    developer.log(
+      'Catálogo sincronizado: ${sets.length} sets, ${cards.length} cartas.',
+      name: 'LocalCatalogService',
+    );
   }
 
   PokemonCard _mapRowToCard(Map<String, dynamic> row, CardLanguage language) {

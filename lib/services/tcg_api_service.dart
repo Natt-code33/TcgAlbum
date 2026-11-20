@@ -91,9 +91,11 @@ class TcgApiService {
 
       if (ranked.isNotEmpty) {
         final cards = ranked.map((item) => item.card).toList(growable: false);
+        final uniqueNumberMatch = ranked.length == 1 &&
+            ranked.first.score >= 0.75;
         final outcome = SearchOutcome(
           cards: cards,
-          autoSelect: CardMatcher.shouldAutoSelect(ranked),
+          autoSelect: uniqueNumberMatch || CardMatcher.shouldAutoSelect(ranked),
           confidence: ranked.first.score,
         );
 
@@ -152,6 +154,9 @@ class TcgApiService {
   ) {
     if (cards.isEmpty) return false;
     if (cards.length > 1) return false;
+    // Sin nombre del OCR, la búsqueda remota puede traer una carta cualquiera
+    // con el mismo número: mejor mostrarla como candidata que auto-elegirla.
+    if (query.trim().isEmpty) return false;
 
     final card = cards.first;
     if (number != null) {

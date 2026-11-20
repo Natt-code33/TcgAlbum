@@ -2,7 +2,7 @@ name: dashboard_personal
 description: "Álbum de cartas Pokémon TCG con OCR, API y gestión de precios."
 publish_to: 'none'
 
-version: 1.0.26+2037
+version: 1.0.33+2044
 
 environment:
   sdk: ^3.5.0
@@ -51,3 +51,6 @@ flutter:
   uses-material-design: true
   assets:
     - assets/database/tcg_catalog.db
+    - assets/data/catalog_extras.json
+    - assets/data/catalog_pricecharting.json
+    - assets/data/card_hashes.json

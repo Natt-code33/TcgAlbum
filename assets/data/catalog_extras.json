@@ -1,0 +1,31 @@
+{
+  "_comment": "Cartas y sets que no están en TCGdex/pokemontcg.io. Se insertan en la copia local del catálogo al iniciar la app. Subir catalog_extras_version al añadir entradas.",
+  "version": 1,
+  "sets": [
+    {
+      "id": "s8a-g",
+      "name": "25th Anniversary Golden Box",
+      "name_es": "25th Anniversary Golden Box",
+      "name_en": "25th Anniversary Golden Box",
+      "name_ja": "25th アニバーサリー ゴールデンボックス",
+      "code": "s8a-g",
+      "official_count": 15,
+      "total_count": 15,
+      "language": "ja"
+    }
+  ],
+  "cards": [
+    {
+      "id": "s8a-g-003",
+      "set_id": "s8a-g",
+      "local_id": "003",
+      "number_int": 3,
+      "total_in_set": 15,
+      "name_ja": "ピカチュウ",
+      "name_en": "Pikachu",
+      "name_es": "Pikachu",
+      "image_url": "https://tcgplayer-cdn.tcgplayer.com/product/594172_in_800x800.jpg",
+      "game": "pokemon"
+    }
+  ]
+}

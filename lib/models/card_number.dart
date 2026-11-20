@@ -86,6 +86,17 @@ class CardNumber {
     );
   }
 
+  /// Quita un código de set inventado por el OCR (por ejemplo "GXEE").
+  CardNumber clearSetCode() => CardNumber(
+        kind: kind == CardNumberKind.setFraction
+            ? CardNumberKind.fraction
+            : kind,
+        setCode: null,
+        prefix: prefix,
+        number: number,
+        total: total,
+      );
+
   static const Set<String> _stopWords = {
     'NO', 'NUM', 'REF', 'CARD', 'PAGE', 'ITEM', 'BASIC', 'STAGE', 'POKEMON',
     'HP', 'PS', 'AR', 'SAR', 'SR', 'UR', 'RR', 'CHR', 'CSR', 'ACE', 'PROMO',

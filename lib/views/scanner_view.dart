@@ -18,6 +18,9 @@ import 'package:google_fonts/google_fonts.dart';
 import '../models/card_number.dart';
 import '../models/pokemon_card.dart';
 import '../services/album_storage_service.dart';
+import '../services/card_visual_index_service.dart';
+import '../services/catalog_sync_service.dart';
+import '../services/local_catalog_service.dart';
 import '../services/ocr_service.dart';
 import '../services/tcg_api_service.dart';
 import '../services/image_matching_service.dart';
@@ -262,7 +265,49 @@ class _ScannerViewState extends State<ScannerView> {
 
       if (!mounted || currentRequestId != _searchRequestId) return;
 
-      if (outcome.cards.isEmpty) {
+      // El OCR puede fallar por completo (foil, chino, japonés). En ese caso
+      // el índice visual aporta candidatas a partir de la propia foto.
+      var cards = List<PokemonCard>.from(outcome.cards);
+      var visualCandidatesAdded = false;
+      List<String> indexIds = const <String>[];
+      if (_capturedImage != null) {
+        final ids = await CardVisualIndexService.instance.nearest(
+          _capturedImage!,
+          limit: 12,
+        );
+        indexIds = ids;
+        if (ids.isNotEmpty) {
+          final indexed = await LocalCatalogService.instance.cardsByIds(
+            ids,
+            effectiveLang,
+          );
+          final byId = {for (final card in cards) card.id: card};
+          for (final card in indexed) {
+            byId[card.id] = card;
+          }
+          // Las coincidencias exactas del índice van primero: son las únicas
+          // fiables cuando el OCR no leyó nombre ni número.
+          cards = [
+            ...indexed,
+            ...byId.values.where((card) => !ids.contains(card.id)),
+          ];
+          visualCandidatesAdded = true;
+        }
+      }
+
+      Map<String, int> indexDistances = const <String, int>{};
+      if (_capturedImage != null && indexIds.isNotEmpty) {
+        indexDistances =
+            await CardVisualIndexService.instance.distances(
+          _capturedImage!,
+          cards.map((card) => card.id),
+        );
+
+      }
+
+      if (!mounted || currentRequestId != _searchRequestId) return;
+
+      if (cards.isEmpty) {
         setState(() {
           _isProcessing = false;
           _errorMessage =
@@ -272,20 +317,32 @@ class _ScannerViewState extends State<ScannerView> {
         return;
       }
 
-      final first = outcome.cards.first;
+      final first = outcome.cards.isNotEmpty ? outcome.cards.first : cards.first;
       setState(() {
-        _searchResults = outcome.cards;
-        _selectedCard = outcome.autoSelect ? first : null;
+        _searchResults = cards;
+        _selectedCard = outcome.autoSelect && !visualCandidatesAdded ? first : null;
         _isProcessing = false;
       });
 
       // El precio se carga después: la carta ya está visible.
       if (_selectedCard != null) {
-        unawaited(_enrichPrice(first, currentRequestId));
+        unawaited(_enrichPrice(_selectedCard!, currentRequestId));
       }
 
-      if (_capturedImage != null && outcome.cards.length > 1) {
-        _runVisualMatching(outcome.cards, currentRequestId);
+      if (_capturedImage != null && cards.length > 1) {
+        unawaited(_runVisualMatching(
+          cards,
+          currentRequestId,
+          indexDistances,
+          targetCardNumber != null &&
+                  [
+                    CardNumberKind.fraction,
+                    CardNumberKind.setFraction,
+                    CardNumberKind.prefixedFraction,
+                  ].contains(targetCardNumber.kind)
+              ? targetCardNumber.numberInt
+              : null,
+        ));
       }
     } on TimeoutException {
       _showError(
@@ -317,8 +374,10 @@ class _ScannerViewState extends State<ScannerView> {
   /// Emparejamiento visual en segundo plano (Isolate):
   Future<void> _runVisualMatching(
     List<PokemonCard> candidates,
-    int requestId,
-  ) async {
+    int requestId, [
+    Map<String, int> indexDistances = const <String, int>{},
+    int? ocrNumber,
+  ]) async {
     if (_capturedImage == null || !mounted) return;
 
     final int visualId = ++_visualRequestId;
@@ -344,13 +403,45 @@ class _ScannerViewState extends State<ScannerView> {
         }
       }
 
-      final sortedCards = rankedResults.map((result) => result.card).toList();
-      final best = rankedResults.first;
-      final second = rankedResults.length > 1 ? rankedResults[1] : null;
+      final sortedResults = List<VisualMatchResult>.from(rankedResults);
+      if (indexDistances.isNotEmpty || ocrNumber != null) {
+        // El número leído y la distancia del índice mandan sobre el color.
+        int numberRank(VisualMatchResult result) {
+          if (ocrNumber == null) return 0;
+          return int.tryParse(result.card.number) == ocrNumber ? 0 : 1;
+        }
 
-      final canSelect = _selectedCard == null &&
-          best.similarity >= 0.82 &&
+        sortedResults.sort((a, b) {
+          final na = numberRank(a);
+          final nb = numberRank(b);
+          if (na != nb) return na.compareTo(nb);
+          final da = indexDistances[a.card.id] ?? 999;
+          final db = indexDistances[b.card.id] ?? 999;
+          if (da != db) return da.compareTo(db);
+          return b.similarity.compareTo(a.similarity);
+        });
+      }
+
+      final sortedCards = sortedResults.map((result) => result.card).toList();
+      final best = sortedResults.first;
+      final second =
+          sortedResults.length > 1 ? sortedResults[1] : null;
+      final bestDistance = indexDistances[best.card.id] ?? 999;
+      final secondDistance = second == null
+          ? 999
+          : (indexDistances[second.card.id] ?? 999);
+      final exactWin = bestDistance <= 8 &&
+          (second == null || secondDistance - bestDistance >= 3);
+      final similarityWin = best.similarity >= 0.70 &&
           (second == null || best.similarity - second.similarity >= 0.08);
+
+      final numberOk = ocrNumber == null ||
+          int.tryParse(best.card.number) == ocrNumber;
+      final numberWin = ocrNumber != null &&
+          numberOk &&
+          indexDistances.isNotEmpty;
+      final canSelect = _selectedCard == null &&
+          (exactWin || similarityWin || numberWin);
 
       setState(() {
         _isMatchingImages = false;
@@ -842,6 +933,31 @@ class _ScannerViewState extends State<ScannerView> {
               ),
               const SizedBox(height: 18),
               NeonPillButton(
+                label: 'Buscar nuevas colecciones',
+                icon: Icons.sync_rounded,
+                style: NeonButtonStyle.dark,
+                onPressed: () async {
+                  final messenger = ScaffoldMessenger.of(context);
+                  Navigator.pop(ctx);
+                  messenger.showSnackBar(
+                    const SnackBar(
+                      content: Text('Buscando nuevas colecciones en TCGdex...'),
+                    ),
+                  );
+                  final added =
+                      await CatalogSyncService.instance.syncIfDue(force: true);
+                  final message = added < 0
+                      ? 'No se pudo conectar con TCGdex. Revisa tu conexión.'
+                      : added > 0
+                          ? 'Añadidas $added colecciones nuevas al catálogo.'
+                          : 'El catálogo ya está al día.';
+                  messenger.showSnackBar(
+                    SnackBar(content: Text(message)),
+                  );
+                },
+              ),
+              const SizedBox(height: 10),
+              NeonPillButton(
                 label: 'Añadir Carta Manualmente',
                 icon: Icons.edit_note_rounded,
                 style: NeonButtonStyle.dark,
@@ -1198,6 +1314,42 @@ class _ScannerViewState extends State<ScannerView> {
     );
   }
 
+  Future<void> _openCatalogPicker() async {
+    final sets = await LocalCatalogService.instance.setsForPicker();
+    if (!mounted) return;
+    if (sets.isEmpty) {
+      _showError('El catálogo local no tiene cartas disponibles.');
+      return;
+    }
+
+    final set = await showModalBottomSheet<Map<String, dynamic>>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => _SetPickerSheet(sets: sets),
+    );
+    if (set == null || !mounted) return;
+
+    final cards = await LocalCatalogService.instance.cardsInSet(
+      set['id'] as String,
+      _selectedLanguage,
+    );
+    if (!mounted || cards.isEmpty) return;
+
+    final card = await showModalBottomSheet<PokemonCard>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => _CardPickerSheet(
+        setName: (set['name_en'] ?? set['name_ja'] ?? set['name'] ?? set['id'])
+            .toString(),
+        cards: cards,
+      ),
+    );
+    if (card != null && mounted) {
+      _manualSearchController.text = '${card.name} ${card.number}';
+      await _selectCard(card);
+    }
+  }
+
   Widget _buildQuickCameraAndChipsBar() {
     return Column(
       children: [
@@ -1216,6 +1368,13 @@ class _ScannerViewState extends State<ScannerView> {
               label: 'Manual',
               color: AppTheme.cyanAccent,
               onTap: () => _openManualEntry(),
+            ),
+            const SizedBox(width: 10),
+            _MiniHudButton(
+              icon: Icons.grid_view_rounded,
+              label: 'Catálogo',
+              color: AppTheme.primary,
+              onTap: () => _openCatalogPicker(),
             ),
           ],
         ),
@@ -1876,6 +2035,181 @@ class _ResultCard extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+ 
+class _SetPickerSheet extends StatefulWidget {
+  final List<Map<String, dynamic>> sets;
+  const _SetPickerSheet({required this.sets});
+
+  @override
+  State<_SetPickerSheet> createState() => _SetPickerSheetState();
+}
+
+class _SetPickerSheetState extends State<_SetPickerSheet> {
+  final _search = TextEditingController();
+
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  String _label(Map<String, dynamic> row) {
+    for (final key in ['name_es', 'name_en', 'name_ja', 'name_zh', 'name']) {
+      final value = row[key] as String?;
+      if (value != null && value.isNotEmpty) return value;
+    }
+    return row['id'] as String? ?? '';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final query = _search.text.trim().toLowerCase();
+    final sets = widget.sets.where((row) {
+      if (query.isEmpty) return true;
+      return _label(row).toLowerCase().contains(query) ||
+          (row['id'] as String? ?? '').toLowerCase().contains(query);
+    }).toList();
+
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.75,
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0B1220),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      child: Column(
+        children: [
+          Container(
+            width: 40,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.white24,
+              borderRadius: BorderRadius.circular(4),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _search,
+            onChanged: (_) => setState(() {}),
+            style: const TextStyle(color: Colors.white),
+            decoration: InputDecoration(
+              hintText: 'Buscar colección (nombre o código)',
+              hintStyle: const TextStyle(color: Colors.white38),
+              prefixIcon: const Icon(Icons.search, color: Colors.white54),
+              filled: true,
+              fillColor: Colors.white10,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide.none,
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Expanded(
+            child: ListView.builder(
+              itemCount: sets.length,
+              itemBuilder: (context, index) {
+                final row = sets[index];
+                return ListTile(
+                  title: Text(_label(row),
+                      style: const TextStyle(color: Colors.white)),
+                  subtitle: Text(
+                    '${row['id']}  •  ${row['card_count']} cartas',
+                    style: const TextStyle(color: Colors.white54, fontSize: 11),
+                  ),
+                  onTap: () => Navigator.pop(context, row),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CardPickerSheet extends StatelessWidget {
+  final String setName;
+  final List<PokemonCard> cards;
+  const _CardPickerSheet({required this.setName, required this.cards});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.8,
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0B1220),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      child: Column(
+        children: [
+          Text(setName,
+              style: const TextStyle(
+                  color: Colors.white, fontWeight: FontWeight.bold)),
+          Text('${cards.length} cartas · elige el número',
+              style: const TextStyle(color: Colors.white54, fontSize: 11)),
+          const SizedBox(height: 10),
+          Expanded(
+            child: GridView.builder(
+              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: 3,
+                childAspectRatio: 0.75,
+                crossAxisSpacing: 8,
+                mainAxisSpacing: 8,
+              ),
+              itemCount: cards.length,
+              itemBuilder: (context, index) {
+                final card = cards[index];
+                return InkWell(
+                  onTap: () => Navigator.pop(context, card),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white10,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Expanded(
+                          child: (card.imageUrl.isNotEmpty &&
+                                  PokemonCard.isValidNetworkUrl(card.imageUrl))
+                              ? CachedNetworkImage(
+                                  imageUrl: card.thumbnailImageUrl,
+                                  placeholder: (_, __) => const Center(
+                                      child: CircularProgressIndicator()),
+                                  errorWidget: (_, __, ___) => const Icon(
+                                      Icons.catching_pokemon,
+                                      color: Colors.white24),
+                                )
+                              : const Icon(Icons.catching_pokemon,
+                                  color: Colors.white24),
+                        ),
+                        Text('#${card.number}',
+                            style: const TextStyle(
+                                color: AppTheme.cyanAccent, fontSize: 11)),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                          child: Text(
+                            card.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                                color: Colors.white, fontSize: 10),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
       ),
     );
   }

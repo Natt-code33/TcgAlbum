@@ -12,13 +12,11 @@
 // ============================================================
 
 import 'dart:io';
-import 'dart:isolate';
-import 'dart:math';
 import 'dart:typed_data';
 import 'dart:developer' as developer;
 import 'package:http/http.dart' as http;
-import 'package:image/image.dart' as img;
 import '../models/pokemon_card.dart';
+import 'visual_signature.dart';
 
 /// Resultado del emparejamiento visual de una carta candidata.
 class VisualMatchResult {
@@ -35,8 +33,6 @@ class VisualMatchResult {
   /// Porcentaje de coincidencia formateado (ej: 94).
   int get matchPercentage => (similarity * 100).clamp(0, 100).round();
 }
-
-typedef _VisualSignature = ({List<bool> hash, List<int> colorProfile});
 
 class ImageMatchingService {
   static const Map<String, String> _headers = {
@@ -57,89 +53,15 @@ class ImageMatchingService {
     }
   }
 
-  /// Decodifica bytes de imagen y calcula su firma visual (dHash + perfil cromático)
-  /// de forma estática para poder ejecutarse dentro de un Isolate secundario.
-  static _VisualSignature? _decodeAndComputeSignature(Uint8List imageBytes) {
-    try {
-      final image = img.decodeImage(imageBytes);
-      if (image == null) return null;
+  /// Misma firma que usa el indexador de CI.
+  static VisualSignature? computeSignature(Uint8List imageBytes) =>
+      computeVisualSignature(imageBytes);
 
-      // 1. Recortar la región del arte / ilustración de la carta:
-      // Verticalmente: entre el 15% y el 60% de la altura (donde está el dibujo)
-      // Horizontalmente: entre el 10% y el 90% del ancho
-      final artWidth = (image.width * 0.80).round().clamp(10, image.width);
-      final artHeight = (image.height * 0.45).round().clamp(10, image.height);
-      final startX = (image.width * 0.10).round().clamp(0, image.width - artWidth);
-      final startY = (image.height * 0.15).round().clamp(0, image.height - artHeight);
+  static int hashDistance(List<bool> a, List<bool> b) =>
+      visualHashDistance(a, b);
 
-      final artCrop = img.copyCrop(
-        image,
-        x: startX,
-        y: startY,
-        width: artWidth,
-        height: artHeight,
-      );
-
-      // 2. Normalizar a 17x16 píxeles para dHash
-      final small = img.copyResize(artCrop, width: 17, height: 16);
-      final gray = img.grayscale(small);
-
-      // 3. dHash: comparar cada pixel horizontal con su vecino adyacente
-      final hash = <bool>[];
-      for (int y = 0; y < 16; y++) {
-        for (int x = 0; x < 16; x++) {
-          final p1 = gray.getPixel(x, y).r;
-          final p2 = gray.getPixel(x + 1, y).r;
-          hash.add(p1 > p2);
-        }
-      }
-
-      // 4. Perfil cromático en 4 cuadrantes (Top-Left, Top-Right, Bottom-Left, Bottom-Right)
-      // Normalizamos el recorte de arte a 4x4 y extraemos R, G, B medios
-      final colorSample = img.copyResize(artCrop, width: 4, height: 4);
-      final colorProfile = <int>[];
-      for (final pixel in colorSample) {
-        colorProfile.add(pixel.r.toInt());
-        colorProfile.add(pixel.g.toInt());
-        colorProfile.add(pixel.b.toInt());
-      }
-
-      return (hash: hash, colorProfile: colorProfile);
-    } catch (_) {
-      return null;
-    }
-  }
-
-  /// Compara dos firmas visuales y devuelve una puntuación entre 0.0 y 1.0.
-  static double _compareSignatures(
-    _VisualSignature sig1,
-    _VisualSignature sig2,
-  ) {
-    // 1. Similitud de estructura por gradientes (Hamming distance sobre 256 bits)
-    int diffBits = 0;
-    final totalBits = min(sig1.hash.length, sig2.hash.length);
-    if (totalBits == 0) return 0.0;
-
-    for (int i = 0; i < totalBits; i++) {
-      if (sig1.hash[i] != sig2.hash[i]) diffBits++;
-    }
-    final hashSimilarity = 1.0 - (diffBits / totalBits);
-
-    // 2. Similitud de color por distancia euclidiana en los cuadrantes de color
-    double colorDistSum = 0;
-    final totalColorChannels = min(sig1.colorProfile.length, sig2.colorProfile.length);
-    for (int i = 0; i < totalColorChannels; i++) {
-      final diff = sig1.colorProfile[i] - sig2.colorProfile[i];
-      colorDistSum += diff * diff;
-    }
-    final avgColorDist = sqrt(colorDistSum / max(1, totalColorChannels));
-    final colorSimilarity = (1.0 - (avgColorDist / 255.0)).clamp(0.0, 1.0);
-
-    // 3. Ponderación final: 75% estructura del dibujo + 25% tonalidad/color.
-    // El color por sí solo no debe decidir: cartas de la misma época comparten
-    // marcos y paletas.
-    return (hashSimilarity * 0.75) + (colorSimilarity * 0.25);
-  }
+  static double _compareSignatures(VisualSignature a, VisualSignature b) =>
+      compareVisualSignatures(a, b);
 
   /// Ordena una lista de cartas candidatas comparando visualmente su arte
   /// con la foto capturada por el usuario en un Isolate en segundo plano.
@@ -155,7 +77,7 @@ class ImageMatchingService {
     try {
       // 1. Leer bytes de la foto del usuario y calcular su firma en Isolate secundario
       final photoBytes = await userPhotoFile.readAsBytes();
-      final userSig = await Isolate.run(() => _decodeAndComputeSignature(photoBytes));
+      final userSig = computeVisualSignature(photoBytes);
       if (userSig == null) {
         return candidateCards.map((c) => VisualMatchResult(card: c, similarity: 0.0)).toList();
       }
@@ -183,22 +105,19 @@ class ImageMatchingService {
       );
 
       // 3. Procesar todas las imágenes candidatas y calcular puntuaciones en un único Isolate
-      final scores = await Isolate.run(() {
-        final results = <double>[];
-        for (final bytes in candidateBytesList) {
-          if (bytes == null) {
-            results.add(0.0);
-            continue;
-          }
-          final refSig = _decodeAndComputeSignature(bytes);
-          if (refSig != null) {
-            results.add(_compareSignatures(userSig, refSig));
-          } else {
-            results.add(0.0);
-          }
+      final scores = <double>[];
+      for (final bytes in candidateBytesList) {
+        if (bytes == null) {
+          scores.add(0.0);
+          continue;
         }
-        return results;
-      });
+        final refSig = computeVisualSignature(bytes);
+        if (refSig != null) {
+          scores.add(_compareSignatures(userSig, refSig));
+        } else {
+          scores.add(0.0);
+        }
+      }
 
       final ranked = <VisualMatchResult>[];
       for (int i = 0; i < candidates.length; i++) {
