@@ -165,7 +165,7 @@ class _ManualCardViewState extends State<ManualCardView> {
   }
 
   Future<void> _saveCard() async {
-    if (!_formKey.currentState!.validate()) return;
+    if (!(_formKey.currentState?.validate() ?? false)) return;
 
     setState(() => _isSaving = true);
 
@@ -185,7 +185,20 @@ class _ManualCardViewState extends State<ManualCardView> {
 
     String finalImageUrl = '';
     if (_imageFile != null) {
-      finalImageUrl = await _storage.persistCardImage(_imageFile!);
+      try {
+        finalImageUrl = await _storage.persistCardImage(_imageFile!);
+      } catch (e) {
+        if (mounted) {
+          setState(() => _isSaving = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('No se pudo procesar la imagen: $e'),
+              backgroundColor: AppTheme.loss,
+            ),
+          );
+        }
+        return;
+      }
     } else if (_imageUrlController.text.trim().isNotEmpty) {
       final inputUrl = _imageUrlController.text.trim();
       if (!PokemonCard.isValidNetworkUrl(inputUrl)) {
@@ -245,7 +258,20 @@ class _ManualCardViewState extends State<ManualCardView> {
         clearGradingScore: gradingScore.isEmpty,
       );
 
-      await _storage.updateCard(updated);
+      try {
+        await _storage.updateCard(updated);
+      } catch (e) {
+        if (mounted) {
+          setState(() => _isSaving = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('No se pudo actualizar la carta: $e'),
+              backgroundColor: AppTheme.loss,
+            ),
+          );
+        }
+        return;
+      }
 
       if (mounted) {
         setState(() => _isSaving = false);
@@ -285,7 +311,21 @@ class _ManualCardViewState extends State<ManualCardView> {
       gradingScore: gradingScore.isNotEmpty ? gradingScore : null,
     );
 
-    final isNew = await _storage.saveCard(card);
+    bool isNew;
+    try {
+      isNew = await _storage.saveCard(card);
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isSaving = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('No se pudo guardar la carta: $e'),
+            backgroundColor: AppTheme.loss,
+          ),
+        );
+      }
+      return;
+    }
 
     if (mounted) {
       setState(() => _isSaving = false);
@@ -467,7 +507,12 @@ class _ManualCardViewState extends State<ManualCardView> {
           if (_imageFile != null) ...[
             ClipRRect(
               borderRadius: BorderRadius.circular(10),
-              child: Image.file(_imageFile!, height: 180, fit: BoxFit.contain),
+              child: Image.file(
+                _imageFile!,
+                height: 180,
+                fit: BoxFit.contain,
+                cacheWidth: 360,
+              ),
             ),
             const SizedBox(height: 10),
           ] else if (PokemonCard.isValidNetworkUrl(_imageUrlController.text.trim())) ...[
@@ -477,6 +522,7 @@ class _ManualCardViewState extends State<ManualCardView> {
                 imageUrl: _imageUrlController.text.trim(),
                 height: 180,
                 fit: BoxFit.contain,
+                memCacheWidth: 360,
                 errorWidget: (_, __, ___) => const Icon(
                   Icons.broken_image,
                   color: Colors.white38,

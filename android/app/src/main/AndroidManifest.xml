@@ -4,26 +4,24 @@
          PERMISOS REQUERIDOS
          ══════════════════════════════════════════════════════════════════ -->
 
-    <!-- Cámara: necesario para tomar fotos de las cartas con ML Kit / image_picker -->
-    <uses-permission android:name="android.permission.CAMERA" />
-
     <!-- Internet: necesario para llamar a la API de Pokémon TCG y cargar imágenes -->
     <uses-permission android:name="android.permission.INTERNET" />
 
-    <!-- Leer almacenamiento externo (Android ≤ 12) para seleccionar imagen de galería -->
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
-        android:maxSdkVersion="32" />
+    <!-- Cámara en vivo (paquete camera). La galería sigue usando Photo Picker. -->
+    <uses-permission android:name="android.permission.CAMERA" />
 
-    <!-- Android 13+: permiso granular para imágenes -->
-    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <!-- image_picker usa el intent de cámara y el Photo Picker; la cámara en
+         vivo necesita el permiso CAMERA declarado arriba. -->
 
     <!-- Declaración de característica de cámara (no obligatoria en dispositivos sin cámara) -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
 
     <application
         android:label="PokéÁlbum"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false">
 
         <activity
             android:name=".MainActivity"

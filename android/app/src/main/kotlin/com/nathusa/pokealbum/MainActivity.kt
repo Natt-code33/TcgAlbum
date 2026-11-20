@@ -1,4 +1,4 @@
-package com.example.dashboard_personal
+package com.nathusa.pokealbum
 
 import io.flutter.embedding.android.FlutterActivity
 

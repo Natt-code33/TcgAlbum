@@ -1,7 +1,10 @@
 // ============================================================
 // services/album_storage_service.dart
 // Servicio de persistencia local con soporte para múltiples álbumes.
-// Usa SharedPreferences con versionado de datos y migración.
+//
+// Usa tablas SQLite normalizadas (albums, album_cards, decks y
+// deck_entries) como almacén principal. Mantiene migración desde el
+// JSON histórico y fallback a SharedPreferences para tests.
 // ============================================================
 
 import 'dart:convert';
@@ -15,15 +18,22 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/pokemon_card.dart';
 import '../models/deck.dart';
+import 'user_storage.dart';
 
 class AlbumStorageService {
   static const _kDataVersion = 'tcg_data_version';
   static const _kAlbumsKey = 'tcg_albums_v2';
+  static const _kAlbumsBackupKey = 'tcg_albums_v2_backup';
   static const _kActiveAlbumKey = 'tcg_active_album';
   static const _kLegacyAlbumKey = 'pokemon_album';
   static const _kDecksKey = 'tcg_decks_v1';
+  static const _kStorageSchemaKey = 'tcg_storage_schema';
+  static const int _storageSchemaVersion = 2;
 
   static const int _currentVersion = 2;
+
+  static List<TcgAlbum>? _albumsCache;
+  static List<TcgDeck>? _decksCache;
 
   /// Fallback en Isolate secundario para plataformas donde el compresor nativo no esté activo.
   static Uint8List? _compressCardPhotoIsolate(Uint8List rawBytes) {
@@ -142,6 +152,298 @@ class AlbumStorageService {
   }
 
   // ── Migración automática ────────────────────────────────────────────────
+  Future<String?> _readValue(String key) async {
+    final dbValue = await UserStorage.instance.read(key);
+    if (dbValue != null) return dbValue;
+
+    // Migración transparente desde SharedPreferences.
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(key);
+  }
+
+  Future<void> _writeValue(String key, String value) async {
+    final stored = await UserStorage.instance.write(key, value);
+    if (stored) return;
+
+    // Fallback para tests o plataformas sin sqflite.
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(key, value);
+  }
+
+  // ── Tablas normalizadas ─────────────────────────────────────────────────
+  Map<String, Object?> _cardRow(
+    String albumId,
+    int position,
+    PokemonCard card,
+  ) {
+    return {
+      'album_id': albumId,
+      'card_id': card.id,
+      'position': position,
+      'name': card.name,
+      'number': card.number,
+      'set_name': card.setName,
+      'image_url': card.imageUrl,
+      'game': card.game.id,
+      'avg_price': card.cardmarketPrices?.averageSellPrice,
+      'trend_price': card.cardmarketPrices?.trendPrice,
+      'psa10_price': card.psa10Price,
+      'set_printed_total': card.setPrintedTotal,
+      'set_total': card.setTotal,
+      'language': card.language,
+      'purchase_price': card.purchasePrice,
+      'purchase_date': card.purchaseDate?.toIso8601String(),
+      'condition': card.condition?.name,
+      'grading_score': card.gradingScore,
+      'quantity': card.quantity,
+    };
+  }
+
+  PokemonCard _cardFromRow(Map<String, Object?> row) {
+    final avg = (row['avg_price'] as num?)?.toDouble();
+    final trend = (row['trend_price'] as num?)?.toDouble();
+    final purchaseDate = row['purchase_date'] as String?;
+
+    return PokemonCard(
+      id: row['card_id'] as String? ?? '',
+      name: row['name'] as String? ?? 'Desconocido',
+      number: row['number'] as String? ?? '?',
+      setName: row['set_name'] as String? ?? 'Set desconocido',
+      imageUrl: row['image_url'] as String? ?? '',
+      game: TcgGame.fromId(row['game'] as String?),
+      cardmarketPrices: (avg != null || trend != null)
+          ? CardmarketPrices(averageSellPrice: avg, trendPrice: trend)
+          : null,
+      psa10Price: (row['psa10_price'] as num?)?.toDouble(),
+      setPrintedTotal: (row['set_printed_total'] as num?)?.toInt(),
+      setTotal: (row['set_total'] as num?)?.toInt(),
+      language: row['language'] as String?,
+      purchasePrice: (row['purchase_price'] as num?)?.toDouble(),
+      purchaseDate:
+          purchaseDate != null ? DateTime.tryParse(purchaseDate) : null,
+      condition: CardCondition.fromString(row['condition'] as String?),
+      gradingScore: row['grading_score'] as String?,
+      quantity: ((row['quantity'] as num?)?.toInt() ?? 1).clamp(1, 9999),
+    );
+  }
+
+  Map<String, Object?> _deckRow(TcgDeck deck) => {
+        'id': deck.id,
+        'name': deck.name,
+        'format': deck.format,
+        'created_at': deck.createdAt.toIso8601String(),
+      };
+
+  Map<String, Object?> _deckEntryRow(
+    String deckId,
+    int position,
+    DeckCardEntry entry,
+  ) =>
+      {
+        'deck_id': deckId,
+        'card_id': entry.cardId,
+        'position': position,
+        'quantity': entry.quantity,
+        'card_name': entry.cardName,
+        'image_url': entry.imageUrl,
+        'set_name': entry.setName,
+        'number': entry.number,
+      };
+
+  Future<List<TcgAlbum>?> _loadAlbumsFromTables() async {
+    final db = await UserStorage.instance.database();
+    if (db == null) return null;
+
+    try {
+      final albumRows = await db.query('albums', orderBy: 'created_at ASC');
+      if (albumRows.isEmpty) return <TcgAlbum>[];
+
+      final cardRows = await db.query(
+        'album_cards',
+        orderBy: 'album_id ASC, position ASC',
+      );
+      final cardsByAlbum = <String, List<PokemonCard>>{};
+      for (final row in cardRows) {
+        final albumId = row['album_id'] as String? ?? '';
+        (cardsByAlbum[albumId] ??= <PokemonCard>[]).add(_cardFromRow(row));
+      }
+
+      return albumRows.map((row) {
+        final id = row['id'] as String? ?? 'album_0';
+        final createdAtRaw = row['created_at'] as String?;
+        return TcgAlbum(
+          id: id,
+          name: row['name'] as String? ?? 'Mi Álbum',
+          createdAt: createdAtRaw != null
+              ? DateTime.tryParse(createdAtRaw) ?? DateTime.now()
+              : DateTime.now(),
+          cards: cardsByAlbum[id] ?? <PokemonCard>[],
+        );
+      }).toList();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<bool> _writeAlbumsToTables(List<TcgAlbum> albums) async {
+    final db = await UserStorage.instance.database();
+    if (db == null) return false;
+
+    try {
+      await db.transaction((txn) async {
+        await txn.delete('album_cards');
+        await txn.delete('albums');
+
+        final batch = txn.batch();
+        for (final album in albums) {
+          batch.insert('albums', {
+            'id': album.id,
+            'name': album.name,
+            'created_at': album.createdAt.toIso8601String(),
+          });
+          for (var i = 0; i < album.cards.length; i++) {
+            batch.insert(
+              'album_cards',
+              _cardRow(album.id, i, album.cards[i]),
+            );
+          }
+        }
+        await batch.commit(noResult: true);
+      });
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<List<TcgDeck>?> _loadDecksFromTables() async {
+    final db = await UserStorage.instance.database();
+    if (db == null) return null;
+
+    try {
+      final deckRows = await db.query('decks', orderBy: 'created_at ASC');
+      final entryRows = await db.query(
+        'deck_entries',
+        orderBy: 'deck_id ASC, position ASC',
+      );
+      final entriesByDeck = <String, List<DeckCardEntry>>{};
+      for (final row in entryRows) {
+        final deckId = row['deck_id'] as String? ?? '';
+        (entriesByDeck[deckId] ??= <DeckCardEntry>[]).add(DeckCardEntry(
+          cardId: row['card_id'] as String? ?? '',
+          quantity: ((row['quantity'] as num?)?.toInt() ?? 1).clamp(1, 60),
+          cardName: row['card_name'] as String?,
+          imageUrl: row['image_url'] as String?,
+          setName: row['set_name'] as String?,
+          number: row['number'] as String?,
+        ));
+      }
+
+      return deckRows.map((row) {
+        final id = row['id'] as String? ?? 'deck_0';
+        final createdAtRaw = row['created_at'] as String?;
+        return TcgDeck(
+          id: id,
+          name: row['name'] as String? ?? 'Mi Mazo',
+          format: row['format'] as String?,
+          createdAt: createdAtRaw != null
+              ? DateTime.tryParse(createdAtRaw) ?? DateTime.now()
+              : DateTime.now(),
+          entries: entriesByDeck[id] ?? <DeckCardEntry>[],
+        );
+      }).toList();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<bool> _writeDecksToTables(List<TcgDeck> decks) async {
+    final db = await UserStorage.instance.database();
+    if (db == null) return false;
+
+    try {
+      await db.transaction((txn) async {
+        await txn.delete('deck_entries');
+        await txn.delete('decks');
+
+        final batch = txn.batch();
+        for (final deck in decks) {
+          batch.insert('decks', _deckRow(deck));
+          for (var i = 0; i < deck.entries.length; i++) {
+            batch.insert(
+              'deck_entries',
+              _deckEntryRow(deck.id, i, deck.entries[i]),
+            );
+          }
+        }
+        await batch.commit(noResult: true);
+      });
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Migra el JSON histórico (kv/SharedPreferences) a las tablas
+  /// normalizadas una sola vez. Si algo falla, el JSON se conserva y se
+  /// reintenta en el siguiente arranque.
+  Future<void> _migrateJsonToTables() async {
+    final db = await UserStorage.instance.database();
+    if (db == null) return;
+
+    final marker = await UserStorage.instance.read(_kStorageSchemaKey);
+    if (marker == '$_storageSchemaVersion') return;
+
+    try {
+      var ok = true;
+      final existingAlbums =
+          await db.query('albums', columns: ['id'], limit: 1);
+      final existingDecks =
+          await db.query('decks', columns: ['id'], limit: 1);
+
+      if (existingAlbums.isEmpty) {
+        final rawAlbums =
+            await _readValue(_kAlbumsKey) ?? await _readValue(_kAlbumsBackupKey);
+        if (rawAlbums != null && rawAlbums.isNotEmpty) {
+          final List<dynamic> decoded = json.decode(rawAlbums);
+          final albums = decoded
+              .whereType<Map<String, dynamic>>()
+              .map(TcgAlbum.fromJson)
+              .toList();
+          if (albums.isNotEmpty) {
+            ok = await _writeAlbumsToTables(albums) && ok;
+          }
+        }
+      }
+
+      if (existingDecks.isEmpty) {
+        final rawDecks = await _readValue(_kDecksKey);
+        if (rawDecks != null && rawDecks.isNotEmpty) {
+          final List<dynamic> decoded = json.decode(rawDecks);
+          final decks = decoded
+              .whereType<Map<String, dynamic>>()
+              .map(TcgDeck.fromJson)
+              .toList();
+          if (decks.isNotEmpty) {
+            ok = await _writeDecksToTables(decks) && ok;
+          }
+        }
+      }
+
+      // Solo marcar como migrado si no hubo fallos de escritura.
+      if (!ok) return;
+
+      await UserStorage.instance.write(
+        _kStorageSchemaKey,
+        '$_storageSchemaVersion',
+      );
+      _albumsCache = null;
+      _decksCache = null;
+    } catch (_) {
+      // Se reintenta en el próximo arranque.
+    }
+  }
+
   Future<void> migrateIfNeeded() async {
     final prefs = await SharedPreferences.getInstance();
     final version = prefs.getInt(_kDataVersion) ?? 1;
@@ -171,15 +473,45 @@ class AlbumStorageService {
 
       await prefs.setInt(_kDataVersion, _currentVersion);
     }
+
+    // v2: normalizar el JSON histórico a tablas relacionales.
+    await _migrateJsonToTables();
   }
 
   // ── Gestión de Álbumes ──────────────────────────────────────────────────
   Future<List<TcgAlbum>> loadAllAlbums() async {
-    await migrateIfNeeded();
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_kAlbumsKey);
+    if (_albumsCache != null) return _albumsCache!;
 
-    if (raw != null && raw.isNotEmpty) {
+    await migrateIfNeeded();
+
+    final canonical =
+        await UserStorage.instance.read(_kStorageSchemaKey) ==
+            '$_storageSchemaVersion';
+    final tableAlbums = await _loadAlbumsFromTables();
+    if (canonical && tableAlbums != null) {
+      if (tableAlbums.isNotEmpty) {
+        _albumsCache = tableAlbums;
+        return tableAlbums;
+      }
+
+      // Base normalizada sin álbumes: primera instalación real o el usuario
+      // borró todos. Crear el álbum por defecto sin resucitar JSON antiguo.
+      final defaultAlbum = TcgAlbum(id: 'album_0', name: 'Mi Álbum');
+      await saveAllAlbums([defaultAlbum]);
+      await setActiveAlbumId(defaultAlbum.id);
+      return [defaultAlbum];
+    }
+
+    final mainRaw = await _readValue(_kAlbumsKey);
+    final backupRaw = await _readValue(_kAlbumsBackupKey);
+
+    for (final entry in <MapEntry<String, String?>>[
+      MapEntry(_kAlbumsKey, mainRaw),
+      MapEntry(_kAlbumsBackupKey, backupRaw),
+    ]) {
+      final raw = entry.value;
+      if (raw == null || raw.isEmpty) continue;
+
       try {
         final List<dynamic> decoded = json.decode(raw);
         final albums = decoded
@@ -187,32 +519,57 @@ class AlbumStorageService {
             .map(TcgAlbum.fromJson)
             .toList();
         if (albums.isNotEmpty) {
+          // Si se recuperó del backup, restaurar la clave principal.
+          // Si venía de SharedPreferences, esto completa la migración a SQLite.
+          await _writeValue(_kAlbumsKey, raw);
+          await _writeAlbumsToTables(albums);
+          _albumsCache = albums;
           return albums;
         }
       } catch (_) {}
     }
 
-    // Si no existe ningún álbum aún, crear y persistir el álbum por defecto
+    // Si había datos pero no se pudieron leer, no sobrescribir a ciegas.
+    final hadStoredData =
+        (mainRaw != null && mainRaw.isNotEmpty) ||
+        (backupRaw != null && backupRaw.isNotEmpty);
     final defaultAlbum = TcgAlbum(id: 'album_0', name: 'Mi Álbum');
+    if (hadStoredData) {
+      return [defaultAlbum];
+    }
+
+    // Primera instalación real: crear y persistir el álbum por defecto.
     await saveAllAlbums([defaultAlbum]);
     await setActiveAlbumId(defaultAlbum.id);
     return [defaultAlbum];
   }
 
   Future<void> saveAllAlbums(List<TcgAlbum> albums) async {
-    final prefs = await SharedPreferences.getInstance();
+    final savedInTables = await _writeAlbumsToTables(albums);
+    if (savedInTables) {
+      _albumsCache = albums;
+      return;
+    }
+
+    // Fallback JSON (tests o plataformas sin SQLite).
     final encoded = json.encode(albums.map((a) => a.toJson()).toList());
-    await prefs.setString(_kAlbumsKey, encoded);
+
+    // Guardar la versión anterior como backup antes de escribir.
+    final previous = await _readValue(_kAlbumsKey);
+    if (previous != null && previous.isNotEmpty && previous != encoded) {
+      await _writeValue(_kAlbumsBackupKey, previous);
+    }
+
+    await _writeValue(_kAlbumsKey, encoded);
+    _albumsCache = albums;
   }
 
   Future<String> getActiveAlbumId() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_kActiveAlbumKey) ?? 'album_0';
+    return await _readValue(_kActiveAlbumKey) ?? 'album_0';
   }
 
   Future<void> setActiveAlbumId(String albumId) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_kActiveAlbumKey, albumId);
+    await _writeValue(_kActiveAlbumKey, albumId);
   }
 
   Future<TcgAlbum> getActiveAlbum() async {
@@ -496,24 +853,45 @@ class AlbumStorageService {
 
   // ── Gestión de Mazos (Decks) virtuales ────────────────────────────────────
   Future<List<TcgDeck>> loadAllDecks() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_kDecksKey);
+    if (_decksCache != null) return _decksCache!;
+
+    await migrateIfNeeded();
+
+    final canonical =
+        await UserStorage.instance.read(_kStorageSchemaKey) ==
+            '$_storageSchemaVersion';
+    final tableDecks = await _loadDecksFromTables();
+    if (tableDecks != null && (canonical || tableDecks.isNotEmpty)) {
+      _decksCache = tableDecks;
+      return tableDecks;
+    }
+
+    final raw = await _readValue(_kDecksKey);
     if (raw != null && raw.isNotEmpty) {
       try {
         final List<dynamic> decoded = json.decode(raw);
-        return decoded
+        final decks = decoded
             .whereType<Map<String, dynamic>>()
             .map(TcgDeck.fromJson)
             .toList();
+        await _writeDecksToTables(decks);
+        _decksCache = decks;
+        return decks;
       } catch (_) {}
     }
-    return [];
+
+    final decks = <TcgDeck>[];
+    _decksCache = decks;
+    return decks;
   }
 
   Future<void> saveAllDecks(List<TcgDeck> decks) async {
-    final prefs = await SharedPreferences.getInstance();
-    final encoded = json.encode(decks.map((d) => d.toJson()).toList());
-    await prefs.setString(_kDecksKey, encoded);
+    final savedInTables = await _writeDecksToTables(decks);
+    if (!savedInTables) {
+      final encoded = json.encode(decks.map((d) => d.toJson()).toList());
+      await _writeValue(_kDecksKey, encoded);
+    }
+    _decksCache = decks;
   }
 
   Future<TcgDeck> createDeck(String name, {String? format}) async {

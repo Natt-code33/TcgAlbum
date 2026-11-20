@@ -9,7 +9,10 @@
 import 'dart:convert';
 import 'dart:developer' as developer;
 import 'package:http/http.dart' as http;
+import '../models/card_number.dart';
 import '../models/pokemon_card.dart';
+import 'card_matcher.dart';
+import 'name_matcher.dart';
 import 'ocr_service.dart';
 import 'local_catalog_service.dart';
 
@@ -19,6 +22,18 @@ class TcgApiException implements Exception {
 
   @override
   String toString() => message;
+}
+
+class SearchOutcome {
+  final List<PokemonCard> cards;
+  final bool autoSelect;
+  final double confidence;
+
+  const SearchOutcome({
+    required this.cards,
+    required this.autoSelect,
+    required this.confidence,
+  });
 }
 
 class TcgApiService {
@@ -41,61 +56,129 @@ class TcgApiService {
   Future<List<PokemonCard>> searchUniversal({
     required String query,
     String? number,
+    CardNumber? cardNumber,
+    TcgGame game = TcgGame.pokemon,
+    CardLanguage language = CardLanguage.auto,
+  }) async {
+    final outcome = await searchUniversalOutcome(
+      query: query,
+      number: number,
+      cardNumber: cardNumber,
+      game: game,
+      language: language,
+    );
+    return outcome.cards;
+  }
+
+  Future<SearchOutcome> searchUniversalOutcome({
+    required String query,
+    String? number,
+    CardNumber? cardNumber,
     TcgGame game = TcgGame.pokemon,
     CardLanguage language = CardLanguage.auto,
   }) async {
     final cleanQuery = _extractCoreName(query);
+    final parsed = cardNumber ?? (number == null ? null : CardNumber.parse(number));
+    SearchOutcome? localFallback;
 
-    // ── 0. BÚSQUEDA INSTANTÁNEA EN CATÁLOGO LOCAL SQLITE (OFFLINE 1 ms) ──
-    if (number != null && number.isNotEmpty) {
-      final parts = number.split('/');
-      final rawNumber = parts[0].trim();
-      final totalInSet = parts.length > 1
-          ? int.tryParse(parts[1].replaceAll(RegExp(r'[^\d]'), '').trim())
-          : null;
-
-      // Extraer set y número permitiendo prefijos directos como "TG14", "GG54", "s8a-013" o "s8a 013"
-      final setMatch = RegExp(r'(?:^|\b)([A-Za-z0-9]{2,6})\s*[-–_\s]?\s*(\d{1,4})(?:/\d{1,4})?')
-          .firstMatch(number.trim());
-      final setCode = setMatch?.group(1);
-      final cardNum = setMatch != null ? '${setMatch.group(1)}${setMatch.group(2)}' : rawNumber;
-
-      final localCard = await LocalCatalogService.instance.findCard(
+    // ── 0. Catálogo local por set + número, con puntuación ─────────────────
+    if (parsed != null) {
+      final ranked = await LocalCatalogService.instance.findCandidates(
         cardName: cleanQuery.isNotEmpty ? cleanQuery : null,
-        setCode: setCode,
-        cardNumber: cardNum,
-        totalInSet: totalInSet,
+        number: parsed,
         language: language,
       );
 
-      if (localCard != null) {
-        final coreQuery = _extractCoreName(cleanQuery).toLowerCase().trim();
-        bool nameMatches = true;
-        if (coreQuery.isNotEmpty) {
-          final cardName = localCard.name.toLowerCase();
-          final tokens = coreQuery.split(RegExp(r'[\s\-_]+')).where((t) => t.length > 2).toList();
-          nameMatches = cardName.contains(coreQuery) || coreQuery.contains(cardName) ||
-              (tokens.isNotEmpty && tokens.any((tok) => cardName.contains(tok)));
-        }
+      if (ranked.isNotEmpty) {
+        final cards = ranked.map((item) => item.card).toList(growable: false);
+        final outcome = SearchOutcome(
+          cards: cards,
+          autoSelect: CardMatcher.shouldAutoSelect(ranked),
+          confidence: ranked.first.score,
+        );
 
-        if (nameMatches) {
-          developer.log('⚡ Carta encontrada al instante en SQLite local: ${localCard.name} (${localCard.id})', name: 'TcgApiService');
-          // Enriquecer con Cardmarket prices rápidamente sin bloquear si la red falla
-          try {
-            final detail = await fetchCardDetail(
-              localCard.id,
-              lang: localCard.language ?? (language == CardLanguage.es ? 'es' : 'en'),
-            ).timeout(const Duration(milliseconds: 1500));
-            if (detail != null) {
-              return [detail];
-            }
-          } catch (_) {}
-          return [localCard];
+        developer.log(
+          '⚡ ${cards.length} candidata(s) locales; mejor=${cards.first.id} '
+          'score=${ranked.first.score.toStringAsFixed(2)}',
+          name: 'TcgApiService',
+        );
+
+        if (ranked.first.score >= 0.55) {
+          return outcome;
         }
+        localFallback = outcome;
       }
     }
 
-    return _searchPokemonSafe(cleanQuery, number: number, language: language);
+    // ── 1. Sin número: catálogo local por nombre antes de tocar la red ─────
+    if (parsed == null && cleanQuery.isNotEmpty) {
+      final localByName = await LocalCatalogService.instance.searchByName(
+        cleanQuery,
+        language: language,
+      );
+      if (localByName.isNotEmpty) {
+        final autoSelect = localByName.length == 1;
+        return SearchOutcome(
+          cards: localByName,
+          autoSelect: autoSelect,
+          confidence: autoSelect ? 0.90 : 0.50,
+        );
+      }
+    }
+
+    // ── 2. Red ──────────────────────────────────────────────────────────────
+    final cards = await _searchPokemonSafe(
+      cleanQuery,
+      number: parsed?.display ?? number,
+      language: language,
+    );
+
+    if (cards.isEmpty && localFallback != null) {
+      return localFallback;
+    }
+
+    final autoSelect = _canAutoSelect(cards, parsed, cleanQuery);
+    return SearchOutcome(
+      cards: cards,
+      autoSelect: autoSelect,
+      confidence: autoSelect ? 0.85 : 0.40,
+    );
+  }
+
+  bool _canAutoSelect(
+    List<PokemonCard> cards,
+    CardNumber? number,
+    String query,
+  ) {
+    if (cards.isEmpty) return false;
+    if (cards.length > 1) return false;
+
+    final card = cards.first;
+    if (number != null) {
+      final local = card.number.replaceAll(RegExp(r'[^\d]'), '');
+      final numberOk = local.isEmpty ||
+          number.numberInt == null ||
+          int.tryParse(local) == number.numberInt;
+      if (!numberOk) return false;
+
+      // El número solo no basta: otro set puede repetir el mismo número.
+      // Si el OCR leyó un nombre, la carta remota debe parecerse.
+      if (query.trim().isNotEmpty) {
+        final target = normalizeName(query);
+        final candidate = normalizeName(card.name);
+        if (target.isNotEmpty) {
+          final similarity =
+              target == candidate ? 1.0 : nameSimilarity(target, candidate);
+          if (similarity < 0.5) return false;
+        }
+      }
+      return true;
+    }
+
+    final target = normalizeName(query);
+    final candidate = normalizeName(card.name);
+    return target.isNotEmpty &&
+        (target == candidate || nameSimilarity(target, candidate) >= 0.90);
   }
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -250,33 +333,76 @@ class TcgApiService {
           final rest = numberResults.where((c) => !matches.contains(c)).toList();
           return [...matches, ...rest];
         }
+        // El número existe en otro set con otro nombre: no devolverlo.
+        // Se continúa con la búsqueda por nombre.
+      } else {
+        return numberResults;
       }
-      return numberResults;
     }
 
     // 2. Si no se encontró por set/número directo, buscar por nombre
     final nameResults = await searchByName(pokemonName, language: language);
+
+    // Si hay número, quedarse con las impresiones de ese mismo número.
+    // Evita listas de cientos de cartas del mismo Pokémon.
+    final parsedNumber = CardNumber.parse(collectionNumber);
+    final targetNumber = parsedNumber?.numberInt;
+
+    List<PokemonCard> sameNumberIn(List<PokemonCard> cards) {
+      if (targetNumber == null) return const [];
+      return cards.where((card) {
+        final local =
+            int.tryParse(card.number.replaceAll(RegExp(r'[^\d]'), ''));
+        return local == targetNumber;
+      }).toList();
+    }
+
+    if (targetNumber != null && nameResults.isNotEmpty) {
+      final sameNumber = sameNumberIn(nameResults);
+      if (sameNumber.isNotEmpty) return sameNumber;
+
+      // El idioma elegido puede no tener esa impresión (p. ej. base set
+      // en español). Probar inglés antes de rendirse.
+      if (language != CardLanguage.en) {
+        final enResults =
+            await searchByName(pokemonName, language: CardLanguage.en);
+        final enSameNumber = sameNumberIn(enResults);
+        if (enSameNumber.isNotEmpty) return enSameNumber;
+      }
+
+      // Ninguna carta con ese número: no devolver cientos de homónimos.
+      return const [];
+    }
+
     return nameResults;
   }
 
   Future<List<PokemonCard>> searchByCollectionNumber(
     String collectionNumber, {
     CardLanguage language = CardLanguage.auto,
+    CardNumber? parsedNumber,
   }) async {
     final langCode = language.apiCode == 'auto' ? 'en' : language.apiCode;
+    final parsed = parsedNumber ?? CardNumber.parse(collectionNumber);
 
     // 1. Extraer número y total del set de la fracción (ej: "113/094" o "113/94")
     final parts = collectionNumber.split('/');
-    final rawFull = parts[0].trim();
-    final rawDigits = rawFull.replaceAll(RegExp(r'[^\d]'), '').trim();
-    final intNumber = int.tryParse(rawDigits);
-    final totalInSet = parts.length > 1
-        ? int.tryParse(parts[1].replaceAll(RegExp(r'[^\d]'), '').trim())
-        : null;
+    final rawFull = parsed?.number ?? parts[0].trim();
+    final rawDigits = parsed?.number ??
+        rawFull.replaceAll(RegExp(r'[^\d]'), '').trim();
+    final intNumber = parsed?.numberInt ?? int.tryParse(rawDigits);
+    final totalInSet = parsed?.totalInt ??
+        (parts.length > 1
+            ? int.tryParse(parts[1].replaceAll(RegExp(r'[^\d]'), '').trim())
+            : null);
 
     final candidateNumbers = <String>{rawFull};
     if (rawDigits.isNotEmpty) {
       candidateNumbers.add(rawDigits);
+    }
+    if (parsed != null) {
+      candidateNumbers.add(parsed.localId);
+      candidateNumbers.add(parsed.number);
     }
     if (intNumber != null) {
       candidateNumbers.add(intNumber.toString());
@@ -319,7 +445,7 @@ class TcgApiService {
     final setWithNumberMatch = RegExp(r'(?:^|\b)([A-Za-z0-9]{2,6})\s*[-–_\s]?\s*(\d{1,4})(?:/\d{1,4})?')
         .firstMatch(collectionNumber.trim());
 
-    if (setWithNumberMatch != null) {
+    if (setWithNumberMatch != null && parsed == null) {
       final setCode = setWithNumberMatch.group(1)!;
       final setId = setCode.toLowerCase();
       final rawNum = setWithNumberMatch.group(2)!;
@@ -391,7 +517,9 @@ class TcgApiService {
         queryParts.add('name:"*${query.trim()}*"');
       }
       if (number != null && number.isNotEmpty) {
-        final rawNum = number.split('/')[0].replaceAll(RegExp(r'[^\d]'), '').trim();
+        final parsed = CardNumber.parse(number);
+        final rawNum = parsed?.number ??
+            number.split('/')[0].replaceAll(RegExp(r'[^\d]'), '').trim();
         if (rawNum.isNotEmpty) {
           queryParts.add('number:"$rawNum"');
         }
@@ -456,6 +584,9 @@ class TcgApiService {
     var name = input.replaceAll(RegExp(r'["״“”«»' "'" r']'), ' ').trim();
     name = name.replaceAll(RegExp(r'\b\d{1,4}/\d{1,4}\b'), ' ');
     name = name.replaceAll(RegExp(r'#\d+\b'), ' ');
+
+    // Ruido de OCR junto al nombre: "Pikachu LV", "40 HP", "PS 40".
+    name = name.replaceAll(RegExp(r'\b(?:lv|hp|ps)\b\.?'), ' ');
 
     name = name.replaceAll(
       RegExp(r'\b(pok[eé]mon\s+)?(b[aá]sico|g[aá]sico|c[aá]sico|p[aá]sico|fase\s*\d*|stage\s*\d*|basic)\b',
@@ -566,9 +697,12 @@ class TcgApiService {
       return _pokemonMultilangMap[clean]!;
     }
 
-    // Coincidencia parcial (por ejemplo si contiene "ex", "vmax", sufijos o espacios)
-    for (final entry in _pokemonMultilangMap.entries) {
-      if (clean.contains(entry.key)) {
+    // Coincidencia parcial por prefijo, ordenando de clave más larga a más
+    // corta para que ミュウツー no se resuelva como ミュウ.
+    final entries = _pokemonMultilangMap.entries.toList()
+      ..sort((a, b) => b.key.length.compareTo(a.key.length));
+    for (final entry in entries) {
+      if (clean == entry.key || clean.startsWith(entry.key)) {
         return entry.value;
       }
     }

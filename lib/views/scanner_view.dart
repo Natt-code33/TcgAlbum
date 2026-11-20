@@ -7,6 +7,7 @@
 // - Barra inferior con Pokéball central luminosa
 // ============================================================
 
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -14,6 +15,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../models/card_number.dart';
 import '../models/pokemon_card.dart';
 import '../services/album_storage_service.dart';
 import '../services/ocr_service.dart';
@@ -22,6 +24,8 @@ import '../services/image_matching_service.dart';
 import '../theme/app_theme.dart';
 import '../widgets/game_badge.dart';
 import '../widgets/pokemon_scanner_hud.dart';
+import 'card_crop_view.dart';
+import 'live_camera_view.dart';
 import 'manual_card_view.dart';
 
 class ScannerView extends StatefulWidget {
@@ -56,7 +60,9 @@ class _ScannerViewState extends State<ScannerView> {
   String? _errorMessage;
   late TcgGame _selectedGame;
   CardLanguage _selectedLanguage = CardLanguage.auto;
+  CardLanguage? _detectedLanguage;
   int _searchRequestId = 0;
+  int _visualRequestId = 0;
   bool _keepCapturedImage = false;
 
   // ── Controladores ─────────────────────────────────────────────────────────
@@ -79,6 +85,8 @@ class _ScannerViewState extends State<ScannerView> {
 
   @override
   void dispose() {
+    unawaited(_ocrService.dispose());
+    _imageMatcher.dispose();
     if (!_keepCapturedImage) {
       _deleteTempFileIfNeeded(_capturedImage);
     }
@@ -87,40 +95,76 @@ class _ScannerViewState extends State<ScannerView> {
   }
 
   // ──────────────────────────────────────────────────────────────────────────
-  // PASO 1: Capturar imagen con la cámara o galería.
+  // PASO 1: Capturar imagen con la galería o la cámara en vivo.
   // ──────────────────────────────────────────────────────────────────────────
-  Future<void> _captureImage([ImageSource source = ImageSource.camera]) async {
+  Future<void> _captureImage([ImageSource source = ImageSource.gallery]) async {
     try {
       final XFile? photo = await _picker.pickImage(
         source: source,
-        imageQuality: 90,
-        maxWidth: 1200,
-        maxHeight: 1600,
+        imageQuality: 92,
+        maxWidth: 1800,
+        maxHeight: 2400,
         preferredCameraDevice: CameraDevice.rear,
       );
 
       if (photo == null) return;
       if (!mounted) return;
 
-      final previousImage = _capturedImage;
-      final imageFile = File(photo.path);
-      setState(() {
-        _capturedImage = imageFile;
-        _isProcessing = true;
-        _isMatchingImages = false;
-        _visualScores = {};
-        _errorMessage = null;
-        _searchResults = [];
-        _selectedCard = null;
-      });
-      if (previousImage != null && previousImage.path != imageFile.path) {
-        _deleteTempFileIfNeeded(previousImage);
-      }
-
-      await _runOcr(imageFile);
+      await _processImageFile(File(photo.path));
     } catch (e) {
       _showError('Error al capturar la imagen: $e');
     }
+  }
+
+  Future<void> _openLiveCamera() async {
+    try {
+      final File? captured = await Navigator.of(context).push<File>(
+        MaterialPageRoute(builder: (_) => const LiveCameraView()),
+      );
+
+      if (captured == null || !mounted) return;
+      await _processImageFile(captured);
+    } catch (e) {
+      _showError('Error al abrir la cámara: $e');
+    }
+  }
+
+  /// Recorte manual opcional + OCR sobre la imagen elegida/capturada.
+  Future<void> _processImageFile(File originalFile) async {
+    if (!mounted) return;
+
+    final croppedFile = await Navigator.of(context).push<File>(
+      MaterialPageRoute(
+        builder: (_) => CardCropView(imageFile: originalFile),
+      ),
+    );
+
+    if (!mounted) return;
+    if (croppedFile == null) {
+      _deleteTempFileIfNeeded(originalFile);
+      return;
+    }
+
+    if (croppedFile.path != originalFile.path) {
+      _deleteTempFileIfNeeded(originalFile);
+    }
+
+    final previousImage = _capturedImage;
+    final imageFile = croppedFile;
+    setState(() {
+      _capturedImage = imageFile;
+      _isProcessing = true;
+      _isMatchingImages = false;
+      _visualScores = {};
+      _errorMessage = null;
+      _searchResults = [];
+      _selectedCard = null;
+    });
+    if (previousImage != null && previousImage.path != imageFile.path) {
+      _deleteTempFileIfNeeded(previousImage);
+    }
+
+    await _runOcr(imageFile);
   }
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -137,10 +181,9 @@ class _ScannerViewState extends State<ScannerView> {
 
       setState(() {
         _ocrResult = result;
-        if (_selectedLanguage == CardLanguage.auto &&
-            result.detectedLanguage != CardLanguage.auto) {
-          _selectedLanguage = result.detectedLanguage;
-        }
+        _detectedLanguage = result.detectedLanguage == CardLanguage.auto
+            ? null
+            : result.detectedLanguage;
       });
 
       if (result.pokemonName != null || result.collectionNumber != null) {
@@ -155,6 +198,7 @@ class _ScannerViewState extends State<ScannerView> {
         await _searchApi(
           pokemonName: result.pokemonName,
           collectionNumber: result.collectionNumber,
+          cardNumber: result.cardNumber,
         );
       } else {
         setState(() {
@@ -174,6 +218,7 @@ class _ScannerViewState extends State<ScannerView> {
   Future<void> _searchApi({
     String? pokemonName,
     String? collectionNumber,
+    CardNumber? cardNumber,
     String? manualQuery,
   }) async {
     final int currentRequestId = ++_searchRequestId;
@@ -187,32 +232,37 @@ class _ScannerViewState extends State<ScannerView> {
     try {
       String queryName = '';
       String? targetNumber;
+      CardNumber? targetCardNumber = cardNumber;
 
       if (manualQuery != null && manualQuery.isNotEmpty) {
         final parts = _parseManualQuery(manualQuery);
         queryName = parts.$1;
         targetNumber = parts.$2;
+        targetCardNumber = targetNumber == null
+            ? null
+            : CardNumber.parse(targetNumber);
       } else {
         queryName = pokemonName ?? '';
         targetNumber = collectionNumber;
       }
 
-      final effectiveLang = (_selectedLanguage == CardLanguage.auto &&
-              _ocrResult?.detectedLanguage != null &&
-              _ocrResult!.detectedLanguage != CardLanguage.auto)
-          ? _ocrResult!.detectedLanguage
+      final effectiveLang = _selectedLanguage == CardLanguage.auto
+          ? (_detectedLanguage ?? CardLanguage.auto)
           : _selectedLanguage;
 
-      final results = await _apiService.searchUniversal(
-        query: queryName,
-        number: targetNumber,
-        game: _selectedGame,
-        language: effectiveLang,
-      );
+      final outcome = await _apiService
+          .searchUniversalOutcome(
+            query: queryName,
+            number: targetNumber,
+            cardNumber: targetCardNumber,
+            game: _selectedGame,
+            language: effectiveLang,
+          )
+          .timeout(const Duration(seconds: 12));
 
       if (!mounted || currentRequestId != _searchRequestId) return;
 
-      if (results.isEmpty) {
+      if (outcome.cards.isEmpty) {
         setState(() {
           _isProcessing = false;
           _errorMessage =
@@ -222,27 +272,25 @@ class _ScannerViewState extends State<ScannerView> {
         return;
       }
 
-      PokemonCard? autoSelected = results.first;
-      if (autoSelected.cardmarketPrices == null) {
-        final detail = await _apiService.fetchCardDetail(
-          autoSelected.id,
-          lang: autoSelected.language ?? _selectedLanguage.apiCode,
-        );
-        if (!mounted || currentRequestId != _searchRequestId) return;
-        if (detail != null) autoSelected = detail;
-      }
-
-      if (!mounted || currentRequestId != _searchRequestId) return;
-
+      final first = outcome.cards.first;
       setState(() {
-        _searchResults = results;
-        _selectedCard = autoSelected;
+        _searchResults = outcome.cards;
+        _selectedCard = outcome.autoSelect ? first : null;
         _isProcessing = false;
       });
 
-      if (_capturedImage != null && results.length > 1) {
-        _runVisualMatching(results);
+      // El precio se carga después: la carta ya está visible.
+      if (_selectedCard != null) {
+        unawaited(_enrichPrice(first, currentRequestId));
       }
+
+      if (_capturedImage != null && outcome.cards.length > 1) {
+        _runVisualMatching(outcome.cards, currentRequestId);
+      }
+    } on TimeoutException {
+      _showError(
+        'La búsqueda tardó demasiado. Revisa tu conexión o usa el catálogo local.',
+      );
     } on TcgApiException catch (e) {
       _showError(e.message);
     } catch (e) {
@@ -250,52 +298,74 @@ class _ScannerViewState extends State<ScannerView> {
     }
   }
 
+  Future<void> _enrichPrice(PokemonCard card, int requestId) async {
+    if (card.cardmarketPrices != null) return;
+
+    try {
+      final detail = await _apiService.fetchCardDetail(
+        card.id,
+        lang: card.language ?? _selectedLanguage.apiCode,
+      );
+      if (!mounted || requestId != _searchRequestId) return;
+      if (_selectedCard?.id != card.id || detail == null) return;
+      setState(() => _selectedCard = detail);
+    } catch (_) {
+      // La carta ya se mostró; el precio es opcional.
+    }
+  }
+
   /// Emparejamiento visual en segundo plano (Isolate):
-  Future<void> _runVisualMatching(List<PokemonCard> candidates) async {
+  Future<void> _runVisualMatching(
+    List<PokemonCard> candidates,
+    int requestId,
+  ) async {
     if (_capturedImage == null || !mounted) return;
 
+    final int visualId = ++_visualRequestId;
     setState(() => _isMatchingImages = true);
 
     try {
       final rankedResults = await _imageMatcher.rankCardsByVisualSimilarity(
         userPhotoFile: _capturedImage!,
         candidateCards: candidates,
-        maxCandidatesToCompare: 16,
+        maxCandidatesToCompare: 6,
       );
 
-      if (!mounted) return;
+      if (!mounted ||
+          visualId != _visualRequestId ||
+          requestId != _searchRequestId) {
+        return;
+      }
 
       final scores = <String, int>{};
-      for (final r in rankedResults) {
-        if (r.matchPercentage > 0) {
-          scores[r.card.id] = r.matchPercentage;
+      for (final result in rankedResults) {
+        if (result.matchPercentage > 0) {
+          scores[result.card.id] = result.matchPercentage;
         }
       }
 
-      final sortedCards = rankedResults.map((r) => r.card).toList();
-      final bestMatch = rankedResults.first;
+      final sortedCards = rankedResults.map((result) => result.card).toList();
+      final best = rankedResults.first;
+      final second = rankedResults.length > 1 ? rankedResults[1] : null;
+
+      final canSelect = _selectedCard == null &&
+          best.similarity >= 0.82 &&
+          (second == null || best.similarity - second.similarity >= 0.08);
 
       setState(() {
         _isMatchingImages = false;
         _visualScores = scores;
         _searchResults = sortedCards;
-
-        if (bestMatch.similarity >= 0.45) {
-          _selectedCard = bestMatch.card;
+        if (canSelect) {
+          _selectedCard = best.card;
         }
       });
 
-      if (_selectedCard != null && _selectedCard!.cardmarketPrices == null) {
-        final detail = await _apiService.fetchCardDetail(
-          _selectedCard!.id,
-          lang: _selectedCard!.language ?? _selectedLanguage.apiCode,
-        );
-        if (mounted && detail != null && _selectedCard?.id == detail.id) {
-          setState(() => _selectedCard = detail);
-        }
+      if (canSelect) {
+        unawaited(_enrichPrice(best.card, requestId));
       }
     } catch (_) {
-      if (mounted) {
+      if (mounted && visualId == _visualRequestId) {
         setState(() => _isMatchingImages = false);
       }
     }
@@ -313,18 +383,27 @@ class _ScannerViewState extends State<ScannerView> {
   Future<void> _selectCard(PokemonCard card) async {
     setState(() => _isProcessing = true);
 
-    if (card.cardmarketPrices == null || card.setName.isEmpty) {
-      final detailed = await _apiService.fetchCardDetail(
-        card.id,
-        lang: card.language ?? _selectedLanguage.apiCode,
-      );
-      if (mounted) {
-        setState(() {
-          _selectedCard = detailed ?? card;
-          _isProcessing = false;
-        });
+    try {
+      if (card.cardmarketPrices == null || card.setName.isEmpty) {
+        final detailed = await _apiService.fetchCardDetail(
+          card.id,
+          lang: card.language ?? _selectedLanguage.apiCode,
+        );
+        if (mounted) {
+          setState(() {
+            _selectedCard = detailed ?? card;
+            _isProcessing = false;
+          });
+        }
+      } else {
+        if (mounted) {
+          setState(() {
+            _selectedCard = card;
+            _isProcessing = false;
+          });
+        }
       }
-    } else {
+    } catch (_) {
       if (mounted) {
         setState(() {
           _selectedCard = card;
@@ -335,31 +414,36 @@ class _ScannerViewState extends State<ScannerView> {
   }
 
   Future<void> _saveCard() async {
-    if (_selectedCard == null) return;
+    final card = _selectedCard;
+    if (card == null) return;
 
     setState(() => _isProcessing = true);
-    final isNew = await _storage.saveCard(_selectedCard!);
 
-    if (mounted) {
-      if (isNew) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('¡"${_selectedCard!.name}" añadida a tu Colección!'),
-            backgroundColor: const Color(0xFF00C853),
-            duration: const Duration(seconds: 2),
+    try {
+      final isNew = await _storage.saveCard(card);
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            isNew
+                ? '¡"${card.name}" añadida a tu Colección!'
+                : '¡Añadida otra copia de "${card.name}" a tu Colección!',
           ),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-                '¡Añadida otra copia de "${_selectedCard!.name}" a tu Colección!'),
-            backgroundColor: AppTheme.success,
-            duration: const Duration(seconds: 2),
-          ),
-        );
-      }
+          backgroundColor: isNew ? const Color(0xFF00C853) : AppTheme.success,
+          duration: const Duration(seconds: 2),
+        ),
+      );
       Navigator.of(context).pop();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _isProcessing = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('No se pudo guardar la carta: $e'),
+          backgroundColor: AppTheme.loss,
+        ),
+      );
     }
   }
 
@@ -386,6 +470,17 @@ class _ScannerViewState extends State<ScannerView> {
 
   (String, String?) _parseManualQuery(String input) {
     var clean = input.replaceAll(RegExp(r'["״“”«»' "'" r']'), ' ').trim();
+
+    // Si el usuario pega solo un número (incluidos promos como SWSH001),
+    // usar el parser único en vez de las heurísticas de texto.
+    final onlyNumber = CardNumber.parse(clean);
+    if (onlyNumber != null &&
+        RegExp(
+          r'^\s*(?:[A-Za-z]{2,5}\d{2,4}|[A-Za-z0-9]{1,6}\s*\d{1,4}\s*/\s*\d{1,4})\s*$',
+          caseSensitive: false,
+        ).hasMatch(clean)) {
+      return ('', onlyNumber.display);
+    }
 
     clean = clean
         .replaceAll(
@@ -820,10 +915,12 @@ class _ScannerViewState extends State<ScannerView> {
                       ],
 
                       // ── Otras versiones / candidatas encontradas ────────────
-                      if (_searchResults.length > 1 && !_isProcessing)
+                      if (_searchResults.isNotEmpty &&
+                          _selectedCard == null &&
+                          !_isProcessing)
                         _buildCandidatesList(),
 
-                      const SizedBox(height: 110),
+                      const SizedBox(height: 190),
                     ],
                   ),
                 ),
@@ -834,7 +931,7 @@ class _ScannerViewState extends State<ScannerView> {
       ),
       bottomNavigationBar: PokeballBottomBar(
         selectedIndex: -1,
-        onCenterScanTap: () => _captureImage(ImageSource.camera),
+        onCenterScanTap: _openLiveCamera,
         onTabSelected: (index) {
           Navigator.of(context).pop(index);
         },
@@ -1016,11 +1113,13 @@ class _ScannerViewState extends State<ScannerView> {
         fit: BoxFit.cover,
         width: double.infinity,
         height: double.infinity,
+        cacheWidth: 560,
       );
     } else if (card != null && PokemonCard.isValidNetworkUrl(card.imageUrl)) {
       previewContent = CachedNetworkImage(
         imageUrl: card.imageUrl,
         fit: BoxFit.contain,
+        memCacheWidth: 560,
         placeholder: (_, __) => const Center(
           child: CircularProgressIndicator(color: AppTheme.cyanAccent),
         ),
@@ -1038,7 +1137,7 @@ class _ScannerViewState extends State<ScannerView> {
       calloutTitle: calloutTitle,
       calloutSubtitle: calloutSubtitle,
       calloutBadge: calloutBadge,
-      onTap: () => _captureImage(ImageSource.camera),
+      onTap: _openLiveCamera,
       child: previewContent,
     );
   }
@@ -1087,7 +1186,7 @@ class _ScannerViewState extends State<ScannerView> {
           ),
           const SizedBox(height: 6),
           Text(
-            'Reconocimiento instantáneo en 15 idiomas y 508 colecciones Pokémon',
+            'Reconocimiento local en varios idiomas con catálogo Pokémon TCG offline',
             textAlign: TextAlign.center,
             style: GoogleFonts.inter(
               color: Colors.white60,
@@ -1436,7 +1535,11 @@ class _ScannerViewState extends State<ScannerView> {
       );
     }
     if (_capturedImage != null) {
-      return Image.file(_capturedImage!, fit: BoxFit.cover);
+      return Image.file(
+        _capturedImage!,
+        fit: BoxFit.cover,
+        cacheWidth: 360,
+      );
     }
     return Container(
       color: Colors.black26,
@@ -1453,7 +1556,9 @@ class _ScannerViewState extends State<ScannerView> {
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 4),
           child: Text(
-            'Otras ediciones encontradas (${_searchResults.length}):',
+            _searchResults.length == 1
+                ? 'Posible coincidencia (1):'
+                : 'Otras ediciones encontradas (${_searchResults.length}):',
             style: GoogleFonts.outfit(
               color: Colors.white70,
               fontSize: 13.5,

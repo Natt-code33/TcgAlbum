@@ -5,7 +5,10 @@ import 'package:flutter/services.dart';
 import 'package:path/path.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
+import '../models/card_number.dart';
 import '../models/pokemon_card.dart';
+import 'card_matcher.dart';
+import 'name_matcher.dart';
 import 'ocr_service.dart';
 
 /// Servicio de catálogo local basado en SQLite preempaquetado.
@@ -21,7 +24,24 @@ class LocalCatalogService {
   bool _isInitialized = false;
   Completer<void>? _initCompleter;
   final List<String> _latinSpeciesCache = [];
+  final List<String> _cjkSpeciesCache = [];
   final Set<String> _exactSpeciesLower = {};
+  Map<String, Set<int>>? _setTotalsCache;
+
+  bool get isReady => _isInitialized && _db != null;
+
+  static const String _cardSelect = '''
+      SELECT c.*,
+             s.name as set_name_text,
+             s.name_es as set_name_es,
+             s.name_en as set_name_en,
+             s.name_ja as set_name_ja,
+             s.name_ko as set_name_ko,
+             s.name_zh as set_name_zh,
+             s.official_count as set_official_count
+      FROM cards c
+      LEFT JOIN sets s ON c.set_id = s.id
+    ''';
 
   /// Inicializa la base de datos local SQLite copiándola desde assets al almacenamiento interno
   /// solo si no existe o si la versión del catálogo ha cambiado. Seguro contra concurrencia.
@@ -75,6 +95,7 @@ class LocalCatalogService {
         'SELECT name_en, name_es, name_ja, name_ko, name_zh_tw, name_zh_cn FROM species_translations',
       );
       final seenLatin = <String>{};
+      final seenCjk = <String>{};
       for (final r in rows) {
         for (final col in ['name_en', 'name_es', 'name_ja', 'name_ko', 'name_zh_tw', 'name_zh_cn']) {
           final val = (r[col] as String?)?.trim();
@@ -83,17 +104,207 @@ class LocalCatalogService {
             if ((col == 'name_en' || col == 'name_es') && seenLatin.add(val.toLowerCase())) {
               _latinSpeciesCache.add(val);
             }
+            if ((col == 'name_ja' || col == 'name_ko' ||
+                    col == 'name_zh_tw' || col == 'name_zh_cn') &&
+                seenCjk.add(val.toLowerCase())) {
+              _cjkSpeciesCache.add(val);
+            }
           }
         }
       }
     } catch (_) {}
   }
 
+  Future<void> _loadSetIndex() async {
+    if (_setTotalsCache != null) return;
+    final rows = await _db!.rawQuery(
+      'SELECT id, official_count, total_count FROM sets',
+    );
+    final totals = <String, Set<int>>{};
+    for (final row in rows) {
+      final id = (row['id'] as String?)?.trim().toLowerCase();
+      if (id == null || id.isEmpty) continue;
+      final counts = <int>{};
+      final official = row['official_count'] as int?;
+      final total = row['total_count'] as int?;
+      if (official != null) counts.add(official);
+      if (total != null) counts.add(total);
+      totals[id] = counts;
+    }
+    _setTotalsCache = totals;
+  }
+
+  /// Extrae posibles códigos de set del texto OCR. No valida nada aquí:
+  /// el filtro real es la distancia contra los sets del catálogo.
+  static Iterable<String> _setCodeTokens(String text) sync* {
+    final seen = <String>{};
+    for (final match in RegExp(r'[A-Za-z][A-Za-z0-9]{2,7}').allMatches(text)) {
+      final token = match.group(0)!;
+      if (!RegExp(r'[A-Za-z]').hasMatch(token)) continue;
+      if (token.length < 3 || token.length > 8) continue;
+      if (seen.add(token.toLowerCase())) yield token;
+    }
+  }
+
+  /// Resuelve el código de set que el OCR leyó mal ("SV118", "DSM1B",
+  /// "svlB"...) contra los sets reales del catálogo.
+  ///
+  /// En cartas japonesas el nombre de la especie suele leerse bien aunque el
+  /// set y el número no. Por eso se restringe a sets que contienen esa
+  /// especie y se puntúa con: distancia del token al id del set, total
+  /// impreso y número más cercano dentro del set.
+  Future<String?> resolveSetCode(
+    String rawText, {
+    String? cardName,
+    int? totalInSet,
+    String? numberText,
+  }) async {
+    if (!_isInitialized || _db == null) await init();
+    if (_db == null) return null;
+    await _loadSetIndex();
+
+    final name = cardName?.trim() ?? '';
+    if (name.length < 2) return null;
+
+    final tokens = _setCodeTokens(rawText)
+        .map((token) => token.toLowerCase())
+        .toList(growable: false);
+    if (tokens.isEmpty) return null;
+
+    final like = '%$name%';
+    final allowedRows = await _db!.rawQuery(
+      'SELECT DISTINCT set_id FROM cards WHERE name_ja LIKE ? '
+      'OR name_en LIKE ? OR name_es LIKE ? OR name_ko LIKE ? OR name_zh LIKE ?',
+      [like, like, like, like, like],
+    );
+    final allowed = <String>{};
+    for (final row in allowedRows) {
+      final id = (row['set_id'] as String?)?.trim().toLowerCase();
+      if (id != null && id.isNotEmpty) allowed.add(id);
+    }
+    if (allowed.isEmpty) return null;
+
+    // Sin total impreso no hay suficiente evidencia para elegir set: un
+    // código mal leído puede apuntar a varios sets con la misma especie.
+    if (totalInSet == null) return null;
+
+    final totals = _setTotalsCache ?? const <String, Set<int>>{};
+    final number = numberText?.trim().toLowerCase() ?? '';
+    String? best;
+    String? second;
+    var bestScore = double.infinity;
+    var secondScore = double.infinity;
+
+    for (final set in allowed) {
+      // El total impreso es la restricción más fiable: descarta sets que no
+      // pueden ser esta carta aunque el token se parezca.
+      final setTotals = totals[set];
+      if (setTotals == null || !setTotals.contains(totalInSet)) continue;
+
+      var minDistance = 99;
+      for (final token in tokens) {
+        final distance = damerauLevenshtein(token, set, maxDist: 5);
+        if (distance < minDistance) minDistance = distance;
+        if (minDistance == 0) break;
+      }
+      if (minDistance > 5) continue;
+
+      var numberFit = false;
+      var exactNumberFit = false;
+      if (number.isNotEmpty) {
+        final numberRows = await _db!.rawQuery(
+          'SELECT local_id FROM cards WHERE lower(set_id) = ? AND '
+          '(name_ja LIKE ? OR name_en LIKE ? OR name_es LIKE ? '
+          'OR name_ko LIKE ? OR name_zh LIKE ?)',
+          [set, like, like, like, like, like],
+        );
+        for (final row in numberRows) {
+          final local = (row['local_id'] as String? ?? '').toLowerCase();
+          if (local.isEmpty) continue;
+          final distance = damerauLevenshtein(local, number, maxDist: 1);
+          if (distance == 0) {
+            exactNumberFit = true;
+            numberFit = true;
+            break;
+          }
+          if (distance <= 1) numberFit = true;
+        }
+      }
+
+      final score = minDistance * 10.0 -
+          (exactNumberFit ? 3.0 : (numberFit ? 1.0 : 0.0));
+      if (score < bestScore) {
+        secondScore = bestScore;
+        second = best;
+        bestScore = score;
+        best = set;
+      } else if (score < secondScore) {
+        secondScore = score;
+        second = set;
+      }
+    }
+
+    if (best == null) return null;
+    // Si dos sets empatan, es mejor no adivinar y dejar que la UI muestre
+    // candidatas.
+    if (second != null && secondScore - bestScore < 1.0) return null;
+    return best;
+  }
+
   /// Corrige errores típicos de OCR en nombres de Pokémon usando distancia Levenshtein
   /// contra las 1.025 especies oficiales (ej: "Char1zard ex" -> "Charizard ex", "Gardevo1r" -> "Gardevoir").
   String repairOcrPokemonName(String rawName) {
     final trimmed = rawName.trim();
-    if (trimmed.isEmpty || _latinSpeciesCache.isEmpty) return trimmed;
+    if (trimmed.isEmpty ||
+        (_latinSpeciesCache.isEmpty && _cjkSpeciesCache.isEmpty)) {
+      return trimmed;
+    }
+
+    // ── Nombres japoneses/coreanos/chinos ────────────────────────────────
+    // El OCR confunde kana pequeños: "ウレモス" -> "ウルガモス".
+    if (RegExp(r'[\u3040-\u30FF\uAC00-\uD7AF\u4E00-\u9FFF]')
+        .hasMatch(trimmed)) {
+      final lower = trimmed.toLowerCase();
+      if (_exactSpeciesLower.contains(lower)) return trimmed;
+
+      final cjkSuffix = RegExp(r'^(.*?)\s*(ex|EX|GX|VMAX|VSTAR|V)$')
+          .firstMatch(trimmed);
+      final cjkBase =
+          (cjkSuffix?.group(1) ?? trimmed).trim();
+      final cjkSuffixPart =
+          cjkSuffix == null ? '' : ' ${cjkSuffix.group(2)!}';
+
+      final baseLower = cjkBase.toLowerCase();
+      if (_exactSpeciesLower.contains(baseLower)) return trimmed;
+      if (cjkBase.length < 2) return trimmed;
+
+      final maxDist = cjkBase.length >= 4 ? 2 : 1;
+      String? bestSpecies;
+      var bestDist = maxDist + 1;
+      for (final candidate in _cjkSpeciesCache) {
+        final candLower = candidate.toLowerCase();
+        if ((candLower.length - baseLower.length).abs() > maxDist) continue;
+        final dist = damerauLevenshtein(baseLower, candLower, maxDist: maxDist);
+        // Con distancia 2 exigimos misma inicial y longitud casi igual;
+        // así "ウレモス" llega a "ウルガモス" sin saltar a otra especie.
+        if (dist == 2 &&
+            (candLower.isEmpty ||
+                baseLower.isEmpty ||
+                candLower[0] != baseLower[0] ||
+                (candLower.length - baseLower.length).abs() > 1)) {
+          continue;
+        }
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestSpecies = candidate;
+          if (dist == 1) break;
+        }
+      }
+      if (bestSpecies != null && bestDist <= maxDist) {
+        return '$bestSpecies$cjkSuffixPart';
+      }
+      return trimmed;
+    }
 
     // Separar sufijo de mecánica (ex, EX, GX, V, VMAX, VSTAR)
     final suffixMatch = RegExp(
@@ -174,132 +385,139 @@ class LocalCatalogService {
     return prev[m];
   }
 
-  /// Busca una carta de forma unívoca e instantánea en el catálogo local por Set, Número y/o Nombre.
+  /// Busca una carta de forma unívoca e instantánea en el catálogo local.
+  /// El número se parsea una sola vez y el nombre solo puntúa: no descarta
+  /// candidatas que ya están identificadas por set/número.
   Future<PokemonCard?> findCard({
     String? cardName,
     String? setCode,
     required String cardNumber,
     int? totalInSet,
     CardLanguage language = CardLanguage.auto,
+    CardNumber? parsedNumber,
+  }) async {
+    final base = parsedNumber ?? CardNumber.parse(cardNumber);
+    final number = base == null
+        ? CardNumber(
+            kind: CardNumberKind.fraction,
+            setCode: setCode,
+            number: cardNumber.replaceAll(RegExp(r'[^\d]'), ''),
+            total: totalInSet?.toString(),
+          )
+        : CardNumber(
+            kind: base.kind,
+            setCode: base.setCode ?? setCode,
+            prefix: base.prefix,
+            number: base.number,
+            total: base.total ?? totalInSet?.toString(),
+          );
+
+    final ranked = await findCandidates(
+      cardName: cardName,
+      number: number,
+      language: language,
+    );
+
+    if (ranked.isEmpty) return null;
+    return ranked.first.score >= 0.55 ? ranked.first.card : null;
+  }
+
+  /// Devuelve candidatas ordenadas por puntuación. La UI decide si
+  /// auto-selecciona o muestra la lista.
+  Future<List<ScoredCard>> findCandidates({
+    String? cardName,
+    CardNumber? number,
+    CardLanguage language = CardLanguage.auto,
+    int limit = 20,
   }) async {
     if (!_isInitialized || _db == null) {
       await init();
     }
-    if (_db == null) return null;
+    if (_db == null) return <ScoredCard>[];
 
-    final cleanNum = cardNumber.replaceAll(RegExp(r'[^\d]'), '').trim();
-    final intNum = int.tryParse(cleanNum);
-    final pad3 = cleanNum.isNotEmpty ? cleanNum.padLeft(3, '0') : cleanNum;
-    final cleanCardNum = cardNumber.trim();
-    final repairedName = cardName != null ? repairOcrPokemonName(cardName) : null;
-    final cleanName = repairedName?.trim().toLowerCase();
+    final rows = <String, Map<String, dynamic>>{};
 
-    bool matchesCardName(Map<String, dynamic> row) {
-      if (cleanName == null || cleanName.isEmpty) return true;
-      for (final col in ['name_ja', 'name_en', 'name_es', 'name_ko', 'name_zh', 'name_fr', 'name_de', 'name_it', 'name_pt', 'name_th', 'name_id']) {
-        final val = (row[col] as String? ?? '').toLowerCase();
-        if (val.isNotEmpty && (val.contains(cleanName) || cleanName.contains(val))) {
-          return true;
-        }
-      }
-      return false;
-    }
-
-    const selectClause = '''
-      SELECT c.*,
-             s.name as set_name_text,
-             s.name_es as set_name_es,
-             s.name_en as set_name_en,
-             s.name_ja as set_name_ja,
-             s.name_ko as set_name_ko,
-             s.name_zh as set_name_zh,
-             s.official_count as set_official_count
-      FROM cards c
-      LEFT JOIN sets s ON c.set_id = s.id
-    ''';
-
-    // ── 1. Búsqueda por Total del Set + Número (ej: "113/094", "113/94", "013/028") ──
-    // PRIORIDAD MÁXIMA: Si tenemos el total oficial del set (/094 o /94), la fracción matemática
-    // es un identificador mucho más estricto y fiable que cualquier texto o prefijo OCR confuso (ej: PLF vs me02).
-    if (totalInSet != null && totalInSet > 0) {
-      final rows = await _db!.rawQuery('''
-        $selectClause
-        WHERE (c.total_in_set = ? OR s.official_count = ? OR s.total_count = ?) 
-          AND (c.local_id = ? OR c.local_id = ? OR c.local_id = ? OR c.number_int = ?)
-        ORDER BY CASE WHEN s.official_count = ? THEN 0 ELSE 1 END
-      ''', [totalInSet, totalInSet, totalInSet, cleanCardNum, cleanNum, pad3, intNum, totalInSet]);
-
-      for (final r in rows) {
-        if (matchesCardName(r)) {
-          developer.log('⚡ Encontrada en catálogo local por total ($totalInSet / $cardNumber): ${r['id']}', name: 'LocalCatalogService');
-          return _mapRowToCard(r, language);
-        }
+    Future<void> run(String where, List<Object?> args) async {
+      final result = await _db!.rawQuery('$_cardSelect $where', args);
+      for (final row in result) {
+        final id = row['id'] as String?;
+        if (id != null) rows[id] = row;
       }
     }
 
-    // ── 2. Búsqueda por Código de Set exacto (ej: "s8a", "sv2a", "cel25", "swsh12", "tg") ──
-    if (setCode != null && setCode.isNotEmpty) {
-      final cleanSet = setCode.toLowerCase().trim();
-      final rows = await _db!.rawQuery('''
-        $selectClause
-        WHERE (c.set_id = ? OR c.id LIKE ?) 
-          AND (c.local_id = ? OR c.local_id = ? OR c.local_id = ? OR c.number_int = ?)
-      ''', [cleanSet, '%$cleanSet%', cleanCardNum, cleanNum, pad3, intNum]);
+    if (number != null) {
+      if (number.setCode != null && number.setCode!.isNotEmpty) {
+        await run(
+          'WHERE lower(c.set_id) = ? AND (c.local_id = ? COLLATE NOCASE OR c.number_int = ?)',
+          [number.setCode!.toLowerCase(), number.localId, number.numberInt],
+        );
+      }
+      await run(
+        'WHERE c.local_id = ? COLLATE NOCASE OR (c.number_int = ? AND c.local_id = ?)',
+        [number.localId, number.numberInt, number.number],
+      );
 
-      for (final r in rows) {
-        if (totalInSet != null && totalInSet > 0) {
-          final official = r['set_official_count'] as int?;
-          final total = r['total_in_set'] as int?;
-          if (official != null && official != totalInSet && total != null && total != totalInSet) {
-            continue;
-          }
+      if (number.totalInt != null) {
+        await run(
+          'WHERE (c.total_in_set = ? OR s.official_count = ? OR s.total_count = ?) '
+          'AND (c.local_id = ? OR c.local_id = ? OR c.number_int = ?)',
+          [
+            number.totalInt,
+            number.totalInt,
+            number.totalInt,
+            number.number,
+            number.number.padLeft(3, '0'),
+            number.numberInt,
+          ],
+        );
+      }
+
+      // Set + nombre: si el OCR confundió un dígito del número, el nombre
+      // exacto dentro del set sigue identificando la carta. Se prueban el
+      // nombre completo y sus palabras para tolerar ruido pegado ("AKRA").
+      final setCode = number.setCode?.trim().toLowerCase();
+      final nameForSet = cardName?.trim() ?? '';
+      if (setCode != null && setCode.isNotEmpty && nameForSet.isNotEmpty) {
+        final tokens = <String>{nameForSet};
+        for (final token in nameForSet.split(RegExp(r'\s+'))) {
+          if (token.length >= 2) tokens.add(token);
         }
-        if (matchesCardName(r)) {
-          developer.log('Encontrada en catálogo local por set_id ($cleanSet $cardNumber): ${r['id']}', name: 'LocalCatalogService');
-          return _mapRowToCard(r, language);
+        for (final token in tokens.take(4)) {
+          final like = '%$token%';
+          await run(
+            'WHERE lower(c.set_id) = ? AND (c.name_ja LIKE ? OR c.name_en LIKE ? '
+            'OR c.name_es LIKE ? OR c.name_ko LIKE ? OR c.name_zh LIKE ? '
+            'OR c.name_fr LIKE ? OR c.name_de LIKE ? OR c.name_it LIKE ?) LIMIT 30',
+            [setCode, like, like, like, like, like, like, like, like],
+          );
         }
       }
     }
 
-    // ── 3. Búsqueda por Nombre Y Número coincidentes en cualquiera de los idiomas ──
-    if (cleanName != null && cleanName.isNotEmpty && (cleanNum.isNotEmpty || cleanCardNum.isNotEmpty)) {
-      final likeParam = '%$cleanName%';
-      final rows = await _db!.rawQuery('''
-        $selectClause
-        WHERE (c.local_id = ? OR c.local_id = ? OR c.local_id = ? OR c.number_int = ?)
-          AND (
-            c.name_ja LIKE ? OR
-            c.name_en LIKE ? OR
-            c.name_es LIKE ? OR
-            c.name_ko LIKE ? OR
-            c.name_zh LIKE ? OR
-            c.name_fr LIKE ? OR
-            c.name_de LIKE ? OR
-            c.name_it LIKE ?
-          )
-        LIMIT 5
-      ''', [
-        cleanCardNum,
-        cleanNum,
-        pad3,
-        intNum,
-        likeParam,
-        likeParam,
-        likeParam,
-        likeParam,
-        likeParam,
-        likeParam,
-        likeParam,
-        likeParam,
-      ]);
-
-      if (rows.isNotEmpty) {
-        developer.log('Encontrada en catálogo local por nombre+número ($cleanName #$cardNumber): ${rows.first['id']}', name: 'LocalCatalogService');
-        return _mapRowToCard(rows.first, language);
-      }
+    final cleanName = cardName?.trim() ?? '';
+    if (cleanName.isNotEmpty) {
+      final like = '%$cleanName%';
+      await run(
+        'WHERE c.name_ja LIKE ? OR c.name_en LIKE ? OR c.name_es LIKE ? '
+        'OR c.name_ko LIKE ? OR c.name_zh LIKE ? OR c.name_fr LIKE ? '
+        'OR c.name_de LIKE ? OR c.name_it LIKE ? LIMIT 30',
+        [like, like, like, like, like, like, like, like],
+      );
     }
 
-    return null;
+    final scored = <ScoredCard>[];
+    for (final row in rows.values) {
+      final score = CardMatcher.scoreRow(
+        row: row,
+        number: number,
+        ocrName: cardName,
+      );
+      if (score <= 0) continue;
+      scored.add(ScoredCard(card: _mapRowToCard(row, language), score: score));
+    }
+
+    scored.sort((a, b) => b.score.compareTo(a.score));
+    return scored.take(limit).toList(growable: false);
   }
 
   /// Busca cartas en el catálogo local por nombre en cualquier idioma (ES, EN, JA, KO, ZH, FR, DE, IT).

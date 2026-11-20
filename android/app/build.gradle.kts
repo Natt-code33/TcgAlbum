@@ -8,7 +8,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.dashboard_personal"
+    namespace = "com.nathusa.pokealbum"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -18,8 +18,8 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.dashboard_personal"
+        // Identificador propio de la app (PokéÁlbum).
+        applicationId = "com.nathusa.pokealbum"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion

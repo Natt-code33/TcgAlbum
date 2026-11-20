@@ -1,28 +1,20 @@
-# 🃏 TcgAlbum - Escáner y Gestor Inteligente Multi-TCG
+# 🃏 TcgAlbum - Escáner y Gestor de Pokémon TCG
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Flutter-3.5+-02569B?logo=flutter&logoColor=white" alt="Flutter">
-  <img src="https://img.shields.io/badge/Android-SDK%2021+-3DDC84?logo=android&logoColor=white" alt="Android">
-  <img src="https://img.shields.io/badge/ML%20Kit-Text%20Recognition-4285F4?logo=google&logoColor=white" alt="Google ML Kit">
-  <img src="https://img.shields.io/badge/License-MIT-purple.svg" alt="License">
-</p>
-
-**TcgAlbum** es una aplicación móvil moderna desarrollada en **Flutter** diseñada para coleccionistas y jugadores de cartas coleccionables (TCG). Permite escanear, identificar con inteligencia visual/OCR, catalogar, valorar con precios oficiales de mercado y gestionar múltiples álbumes sin perder datos.
+**TcgAlbum** es una aplicación móvil Flutter para escanear, identificar, catalogar y valorar cartas **exclusivamente de Pokémon TCG**. Usa OCR local con Google ML Kit, catálogo SQLite offline y precios de Cardmarket vía TCGdex.
 
 ---
 
-## 🚀 Juegos Soportados (Multi-TCG)
+## 🚀 Alcance
 
-La aplicación integra APIs oficiales y de comunidad especializadas para cada juego de cartas:
+La aplicación está enfocada **solo en Pokémon TCG**. No incluye Magic, Yu-Gi-Oh!, Digimon, One Piece ni Lorcana.
 
-| Juego | Base de Datos Principal | Precios y Mercado |
-| :--- | :--- | :--- |
-| ⚡ **Pokémon TCG** | TCGdex API + Pokémon TCG IO | Cardmarket (€) & PSA 10 |
-| 🔮 **Magic: The Gathering** | Scryfall API | Cardmarket (€), TCGplayer |
-| 👁️ **Yu-Gi-Oh!** | YGOPRODeck API | Cardmarket (€) |
-| 🦖 **Digimon Card Game** | DigimonCard.io | Precios de referencia |
-| 🏴‍☠️ **One Piece Card Game** | OPTCG API | Precios de referencia |
-| ✨ **Disney Lorcana** | Lorcana API | Precios de referencia |
+| Función | Implementación |
+| :--- | :--- |
+| Catálogo | SQLite local (41.962 cartas, 508 sets) |
+| OCR | Google ML Kit (latino, japonés, coreano, chino) |
+| Identificación | Set + número + nombre con puntuación de candidatos |
+| Precios | TCGdex / Cardmarket y fallback pokemontcg.io |
+| Captura | `image_picker` (foto única) |
 
 ---
 
@@ -54,7 +46,6 @@ La aplicación integra APIs oficiales y de comunidad especializadas para cada ju
 ### 🎨 5. Diseño y Ergonomía
 - Interfaz moderna en Modo Oscuro optimizada con Material Design 3.
 - Espaciado ergonómico inferior para que ningún botón ni dato quede cortado detrás de la barra de navegación del sistema Android.
-- Selector rápido de TCG para evitar confusiones de numeración entre diferentes juegos.
 
 ---
 
@@ -62,11 +53,11 @@ La aplicación integra APIs oficiales y de comunidad especializadas para cada ju
 
 - **Framework:** [Flutter](https://flutter.dev) (Dart 3)
 - **Visión y OCR:** `google_mlkit_text_recognition` (modelos latino, japonés, coreano y chino)
-- **Cámara:** `camera` + `image_picker`
-- **Procesamiento de Imagen:** `image` (dHash, redimensión y normalización de imagen)
-- **Almacenamiento Local:** `shared_preferences` con serialización JSON estructurada
+- **Cámara:** `image_picker` (foto única; no hay cámara en vivo)
+- **Procesamiento de Imagen:** `image` (firma visual dHash y recorte)
+- **Almacenamiento Local:** `shared_preferences` con backup de recuperación; catálogo SQLite
 - **Red y Caché:** `http`, `cached_network_image`
-- **Utilidades:** `intl`, `path_provider`, `share_plus`, `file_picker`
+- **Utilidades:** `path_provider`, `sqflite`
 
 ---
 
@@ -107,7 +98,6 @@ La aplicación integra APIs oficiales y de comunidad especializadas para cada ju
 
 1. **Selecciona tu Álbum:** En la pantalla principal, pulsa sobre el nombre del álbum actual para cambiarlo o crear uno nuevo con el botón `+`.
 2. **Escanea una Carta:** Pulsa el botón flotante con el icono de cámara.
-   - Selecciona el TCG correspondiente (Pokémon, MTG, Yu-Gi-Oh!, etc.).
    - Ajusta la carta dentro del marco guía y presiona el obturador.
    - La app detectará el código, comparará el arte visual y te mostrará la mejor coincidencia junto con las alternativas.
 3. **Consulta Precios:** Revisa el valor estimado en Cardmarket y el precio PSA 10.

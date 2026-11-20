@@ -1,7 +1,7 @@
 // ============================================================
 // services/image_matching_service.dart
 // Servicio de reconocimiento visual y comparación de imágenes
-// para cartas TCG (Pokémon, Magic, YGO, Digimon, One Piece, etc.).
+// para cartas Pokémon TCG.
 //
 // Compara la fotografía capturada por la cámara con las imágenes
 // de las cartas candidatas mediante:
@@ -45,8 +45,17 @@ class ImageMatchingService {
   };
 
   final http.Client _client;
+  final bool _ownsClient;
 
-  ImageMatchingService({http.Client? client}) : _client = client ?? http.Client();
+  ImageMatchingService({http.Client? client})
+      : _client = client ?? http.Client(),
+        _ownsClient = client == null;
+
+  void dispose() {
+    if (_ownsClient) {
+      _client.close();
+    }
+  }
 
   /// Decodifica bytes de imagen y calcula su firma visual (dHash + perfil cromático)
   /// de forma estática para poder ejecutarse dentro de un Isolate secundario.
@@ -126,8 +135,10 @@ class ImageMatchingService {
     final avgColorDist = sqrt(colorDistSum / max(1, totalColorChannels));
     final colorSimilarity = (1.0 - (avgColorDist / 255.0)).clamp(0.0, 1.0);
 
-    // 3. Ponderación final: 55% estructura del dibujo + 45% tonalidad/color
-    return (hashSimilarity * 0.55) + (colorSimilarity * 0.45);
+    // 3. Ponderación final: 75% estructura del dibujo + 25% tonalidad/color.
+    // El color por sí solo no debe decidir: cartas de la misma época comparten
+    // marcos y paletas.
+    return (hashSimilarity * 0.75) + (colorSimilarity * 0.25);
   }
 
   /// Ordena una lista de cartas candidatas comparando visualmente su arte
@@ -158,7 +169,7 @@ class ImageMatchingService {
           try {
             if (PokemonCard.isValidNetworkUrl(card.imageUrl)) {
               final res = await _client
-                  .get(Uri.parse(card.imageUrl), headers: _headers)
+                  .get(Uri.parse(card.thumbnailImageUrl), headers: _headers)
                   .timeout(const Duration(seconds: 4));
               if (res.statusCode == 200) {
                 return res.bodyBytes;
